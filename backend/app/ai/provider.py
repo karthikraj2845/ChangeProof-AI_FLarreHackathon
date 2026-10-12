@@ -219,14 +219,14 @@ class AIProvider:
             ambiguity = True
             operation = "AMBIGUOUS_REQUEST"
 
-        # If rule could not be inferred and is not generic safe-driver context, do NOT silently invent a rule
+        # If rule could not be inferred from text, DB, or keywords, do NOT silently default to a rule.
         if not target_rule:
-            if condition_field != "unknown":
-                # Default to safe-driver context only if condition unambiguously belongs to motor discount
-                target_rule = "RULE-SAFE-DRIVER"
+            ambiguity = True
+            if operation == "UNSUPPORTED_OPERATION":
+                pass
             else:
-                ambiguity = True
-                operation = "UNSUPPORTED_OPERATION"
+                operation = "AMBIGUOUS_REQUEST"
+            condition_field = condition_field if condition_field != "unknown" else "unknown"
 
         confidence = 0.98 if (condition_field != "unknown" and not ambiguity and target_rule) else (0.20 if ambiguity else 0.40)
 

@@ -261,6 +261,8 @@ class TestWorkflowRunnerGovernance:
                     reviewer="Override Manager",
                     action="APPROVE",
                     justification="Force approval.",
+                    snapshot_id=state["snapshot_id"],
+                    snapshot_hash=state["snapshot_hash"],
                 )
 
             # Count denial audit events after — must be one more
@@ -271,3 +273,69 @@ class TestWorkflowRunnerGovernance:
             assert after_count == before_count + 1, "Denial audit event must be recorded"
         finally:
             db.close()
+
+    def test_durable_checkpoint_recovery_across_checkpointer_recreation(self, tmp_path):
+        """
+        Priority 4: Inspect persistent SqliteSaver.
+        Pause at human review, simulate application/checkpointer recreation by opening
+        a brand-new SqliteSaver on the same SQLite file, verify thread state is recovered,
+        and resume workflow through human review gate to END.
+        """
+        import sqlite3
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        db_file = str(tmp_path / "test_durable_checkpoints.db")
+        thread_id = f"WF-DURABLE-{uuid.uuid4().hex[:8].upper()}"
+        config = {"configurable": {"thread_id": thread_id}}
+        initial_state = _make_initial_state(thread_id)
+
+        # 1. Initialize First Checkpointer & Graph Instance
+        conn1 = sqlite3.connect(db_file, check_same_thread=False)
+        saver1 = SqliteSaver(conn1)
+        saver1.setup()
+        app1 = build_change_assurance_graph(checkpointer=saver1)
+
+        # Invoke to pause at human_review_gate
+        app1.invoke(initial_state, config=config)
+
+        # Verify state is paused before human review gate
+        paused_state1 = app1.get_state(config)
+        assert "human_review_gate" in paused_state1.next
+        assert paused_state1.values.get("workflow_id") == thread_id
+
+        # Close first connection to simulate process shutdown
+        conn1.close()
+
+        # 2. Simulate Application Restart: Open brand new SqliteSaver on the same DB file
+        conn2 = sqlite3.connect(db_file, check_same_thread=False)
+        saver2 = SqliteSaver(conn2)
+        saver2.setup()
+        app2 = build_change_assurance_graph(checkpointer=saver2)
+
+        # Verify state is recovered from persistent disk
+        recovered_state = app2.get_state(config)
+        assert recovered_state is not None, "Persistent checkpoint must be recoverable after restart"
+        assert "human_review_gate" in recovered_state.next
+        assert recovered_state.values.get("workflow_id") == thread_id
+        assert len(recovered_state.values.get("test_results", [])) > 0
+
+        # Inject decision and resume on the recreated graph instance
+        decision = {
+            "reviewer": "Disaster Recovery Auditor",
+            "action": "REJECT",
+            "justification": "Verified persistent resumption",
+            "timestamp": "2026-10-12T12:00:00Z",
+        }
+        app2.update_state(
+            config,
+            {"human_review_decision": decision},
+            as_node="readiness_assessment",
+        )
+        resumed = app2.invoke(None, config=config)
+
+        # Verify resumed execution reached END
+        final_state = app2.get_state(config)
+        assert final_state.next == (), f"Expected END, got {final_state.next}"
+        assert final_state.values["human_review_decision"]["reviewer"] == "Disaster Recovery Auditor"
+
+        conn2.close()

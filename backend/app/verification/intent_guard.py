@@ -32,9 +32,19 @@ class IntentGuardVerifier:
         approved_reference_version_id: str,
         linked_change_id: Optional[str] = None,
         expected_version_hash: Optional[str] = None,
+        strict_mode: bool = False,
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         unique_suffix = uuid.uuid4().hex[:6].upper()
+
+        # Strict mode check: expected_version_hash is required
+        if strict_mode and not expected_version_hash:
+            return {
+                "status": "UNVERIFIABLE",
+                "transaction_id": transaction_id,
+                "summary": "Strict Mode Error: expected_version_hash is mandatory when operating in strict verification mode.",
+                "finding_created": False,
+            }
 
         # 1. Store observed transaction
         event_record = ObservedEvent(

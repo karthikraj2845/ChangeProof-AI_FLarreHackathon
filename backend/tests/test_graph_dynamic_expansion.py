@@ -151,3 +151,101 @@ def test_dependency_graph_cycle_handling():
 
     finally:
         db.close()
+
+
+def test_full_workflow_dynamic_test_discovery_and_execution_without_code_changes():
+    """
+    Proves that a newly registered graph dependency and linked test are dynamically
+    selected and executed by the complete LangGraph workflow without editing workflow code.
+    """
+    from app.orchestration.runner import WorkflowRunner
+    from app.models.change import ChangeRequest
+
+    db: Session = SessionLocal()
+    try:
+        # 1. Register a dynamic regression test linked to RULE-SAFE-DRIVER
+        dyn_test_id = "TEST-SD-DYNAMIC-AUDIT-099"
+        existing = db.query(RegressionTest).filter_by(id=dyn_test_id).first()
+        if not existing:
+            dyn_test = RegressionTest(
+                id=dyn_test_id,
+                name="Dynamic Audit Verification Test (CA Driver Safe Score 10)",
+                description="Dynamically added test without modifying workflow code",
+                category="POSITIVE",
+                linked_rule_id="RULE-SAFE-DRIVER",
+                linked_requirement_id="REQ-AUTO-DISC-001",
+                input_data={
+                    "jurisdiction": "CA",
+                    "driver_risk_score": 10,
+                    "vehicle_category": "SEDAN",
+                    "policy_active": True,
+                },
+                expected_baseline_outcome={"eligible": True, "discount_percentage": 10.0},
+                expected_proposed_outcome={"eligible": True, "discount_percentage": 10.0},
+                coverage_tags=["jurisdiction", "driver_risk_score", "DYNAMIC_AUDIT"],
+            )
+            db.add(dyn_test)
+
+            # Also add an artifact in the graph linked via VALIDATED_BY
+            dyn_art = Artifact(
+                id=f"ART-{dyn_test_id}",
+                name="Dynamic Audit Test Artifact",
+                artifact_type="REGRESSION_TEST",
+                description="Graph node for dynamically added test",
+                version="1.0",
+                metadata_json={"test_id": dyn_test_id},
+            )
+            db.add(dyn_art)
+
+            edge = DependencyEdge(
+                id=f"EDGE-{dyn_test_id}",
+                source_artifact_id="ART-SRV-001",  # Eligibility service node
+                target_artifact_id=f"ART-{dyn_test_id}",
+                relationship_type="VALIDATED_BY",
+                confidence=1.0,
+            )
+            db.add(edge)
+            db.commit()
+
+        # 2. Run the complete workflow
+        state = WorkflowRunner.start_change_assurance(
+            db=db,
+            change_request_id="CR-2026-001",
+            user_request="Remove the jurisdiction restriction from the safe-driver discount eligibility rule.",
+        )
+
+        # 3. Assert the dynamic test was automatically selected, executed, and tracked in provenance
+        assert dyn_test_id in state["selected_tests"], f"{dyn_test_id} must be selected by workflow"
+        assert dyn_test_id in state["test_provenance"], f"{dyn_test_id} must have provenance"
+        
+        executed_test_ids = [r["test_id"] for r in state.get("test_results", [])]
+        assert dyn_test_id in executed_test_ids, f"{dyn_test_id} must be executed in test_results"
+
+        # Verify execution outcome for the dynamic test was PASSED (CA driver is eligible under both v1.0 and v1.1)
+        dyn_result = next(r for r in state["test_results"] if r["test_id"] == dyn_test_id)
+        assert dyn_result["status"] == "PASSED"
+
+        # 4. Verify test is included in the authoritative EvidenceSnapshot and readiness calculation
+        from app.models.snapshot import EvidenceSnapshot
+        snap_id = state.get("snapshot_id")
+        assert snap_id is not None
+        snapshot = db.query(EvidenceSnapshot).filter_by(id=snap_id).first()
+        assert snapshot is not None
+        assert dyn_test_id in snapshot.selected_test_ids, f"{dyn_test_id} must be in snapshot.selected_test_ids"
+        assert snapshot.test_summary.get("total_executed", 0) >= 9
+
+        # Verify readiness result incorporates the run
+        readiness = state.get("readiness_result", {})
+        assert readiness.get("status") in ["BLOCKED", "READY", "NEEDS_HUMAN_REVIEW"]
+
+    finally:
+        # Clean up dynamic records to keep the test environment pristine for other tests
+        try:
+            db.query(DependencyEdge).filter(DependencyEdge.id == f"EDGE-{dyn_test_id}").delete()
+            db.query(Artifact).filter(Artifact.id == f"ART-{dyn_test_id}").delete()
+            db.query(RegressionTest).filter(RegressionTest.id == dyn_test_id).delete()
+            db.commit()
+        except Exception:
+            pass
+        db.close()
+

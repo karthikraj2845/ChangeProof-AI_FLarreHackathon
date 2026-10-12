@@ -76,6 +76,8 @@ class SimulateTransactionRequest(BaseModel):
     approved_reference_version_id: str = "RULE-SAFE-DRIVER-v1.0"
     simulated_deployed_version_id: str = "RULE-SAFE-DRIVER-v1.1-proposed"
     linked_change_id: str = "CR-2026-001"
+    expected_version_hash: Optional[str] = None
+    strict_mode: bool = False
 
 
 # Finding Update

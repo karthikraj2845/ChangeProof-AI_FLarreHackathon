@@ -51,6 +51,8 @@ def simulate_transaction(payload: SimulateTransactionRequest, db: Session = Depe
         reported_version_id=payload.simulated_deployed_version_id,
         approved_reference_version_id=payload.approved_reference_version_id,
         linked_change_id=payload.linked_change_id,
+        expected_version_hash=payload.expected_version_hash,
+        strict_mode=payload.strict_mode,
     )
 
     return verification_res

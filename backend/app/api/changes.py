@@ -216,6 +216,42 @@ def approve_change(change_id: str, payload: HumanReviewDecisionRequest, db: Sess
     if not cr:
         raise HTTPException(status_code=404, detail="Change request not found")
 
+    # Verify Snapshot Integrity, Freshness, and Change Isolation
+    # For approval, reviewer MUST explicitly provide the reviewed snapshot_id and snapshot_hash.
+    if not payload.snapshot_id:
+        denial_audit = AuditEvent(
+            id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+            event_type="APPROVAL_ATTEMPT_DENIED_NO_SNAPSHOT",
+            entity_type="CHANGE_REQUEST",
+            entity_id=change_id,
+            actor=payload.reviewer,
+            details={"justification": payload.justification, "reason": "Reviewer did not provide explicit snapshot_id"},
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(denial_audit)
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="GOVERNANCE VIOLATION: Approval requires explicit snapshot_id of the reviewed evidence."
+        )
+
+    if not payload.snapshot_hash:
+        denial_audit = AuditEvent(
+            id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+            event_type="APPROVAL_ATTEMPT_DENIED_NO_HASH",
+            entity_type="CHANGE_REQUEST",
+            entity_id=change_id,
+            actor=payload.reviewer,
+            details={"justification": payload.justification, "reason": "Reviewer did not provide explicit snapshot_hash"},
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(denial_audit)
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="GOVERNANCE VIOLATION: Approval requires explicit snapshot_hash of the reviewed evidence."
+        )
+
     if cr.readiness_status == "BLOCKED":
         denial_audit = AuditEvent(
             id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
@@ -233,45 +269,8 @@ def approve_change(change_id: str, payload: HumanReviewDecisionRequest, db: Sess
             detail="GOVERNANCE VIOLATION: Cannot approve change. Release is strictly BLOCKED by deterministic policy due to critical regressions."
         )
 
-    # Verify Snapshot Integrity, Freshness, and Change Isolation
-    snap_id = payload.snapshot_id or (cr.readiness_details.get("snapshot_id") if cr.readiness_details else None)
-    snap_hash = payload.snapshot_hash or (cr.readiness_details.get("snapshot_hash") if cr.readiness_details else None)
-
-    if not snap_id:
-        denial_audit = AuditEvent(
-            id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
-            event_type="APPROVAL_ATTEMPT_DENIED_NO_SNAPSHOT",
-            entity_type="CHANGE_REQUEST",
-            entity_id=change_id,
-            actor=payload.reviewer,
-            details={"justification": payload.justification, "reason": "No evidence snapshot bound"},
-            timestamp=datetime.now(timezone.utc),
-        )
-        db.add(denial_audit)
-        db.commit()
-        raise HTTPException(
-            status_code=400,
-            detail="GOVERNANCE VIOLATION: Cannot approve change without a valid, persisted Evidence Snapshot."
-        )
-
-    # Validate reviewed hash if provided explicitly
-    if payload.snapshot_hash and cr.readiness_details and cr.readiness_details.get("snapshot_hash"):
-        if payload.snapshot_hash != cr.readiness_details.get("snapshot_hash"):
-            denial_audit = AuditEvent(
-                id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
-                event_type="APPROVAL_ATTEMPT_DENIED_HASH_MISMATCH",
-                entity_type="CHANGE_REQUEST",
-                entity_id=change_id,
-                actor=payload.reviewer,
-                details={"justification": payload.justification, "reason": "Reviewed snapshot hash does not match stored snapshot hash"},
-                timestamp=datetime.now(timezone.utc),
-            )
-            db.add(denial_audit)
-            db.commit()
-            raise HTTPException(
-                status_code=400,
-                detail=f"EVIDENCE HASH MISMATCH: Reviewed snapshot hash '{payload.snapshot_hash}' does not match stored hash."
-            )
+    snap_id = payload.snapshot_id
+    snap_hash = payload.snapshot_hash
 
     validity = SnapshotService.verify_snapshot_validity(
         db=db,

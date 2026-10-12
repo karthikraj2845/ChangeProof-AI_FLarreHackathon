@@ -161,31 +161,80 @@ class TestIntentGuardTraceability:
         finally:
             db.close()
 
-    def test_unapproved_reference_version_returns_unverifiable(self):
-        """
-        An unapproved reference version must return UNVERIFIABLE status.
-        """
+    def test_strict_mode_requires_expected_version_hash(self):
+        """In strict mode, omitting expected_version_hash must return UNVERIFIABLE."""
         db = SessionLocal()
         try:
             res = IntentGuardVerifier.verify_event(
                 db=db,
-                transaction_id="TXN-UNVERIF-001",
+                transaction_id="TXN-STRICT-NOHASH",
                 input_data={
                     "jurisdiction": "CA",
                     "driver_risk_score": 15,
                     "vehicle_category": "SEDAN",
                     "policy_active": True,
                 },
-                observed_outcome={
-                    "eligible": True,
-                    "discount_percentage": 10.0,
-                },
-                reported_version_id="RULE-SAFE-DRIVER-v1.1-proposed",
-                # proposed version is not APPROVED, so verification should fail
-                approved_reference_version_id="RULE-SAFE-DRIVER-v1.1-proposed",
+                observed_outcome={"eligible": True, "discount_percentage": 10.0},
+                reported_version_id="RULE-SAFE-DRIVER-v1.0",
+                approved_reference_version_id="RULE-SAFE-DRIVER-v1.0",
+                expected_version_hash=None,
+                strict_mode=True,
             )
-
             assert res["status"] == "UNVERIFIABLE"
-            assert "NOT 'APPROVED'" in res["summary"] or "not found" in res["summary"].lower()
+            assert "expected_version_hash is mandatory" in res["summary"]
+        finally:
+            db.close()
+
+    def test_strict_mode_rejects_mismatched_hash(self):
+        """In strict mode, mismatched expected_version_hash must return UNVERIFIABLE."""
+        db = SessionLocal()
+        try:
+            res = IntentGuardVerifier.verify_event(
+                db=db,
+                transaction_id="TXN-STRICT-BADHASH",
+                input_data={
+                    "jurisdiction": "CA",
+                    "driver_risk_score": 15,
+                    "vehicle_category": "SEDAN",
+                    "policy_active": True,
+                },
+                observed_outcome={"eligible": True, "discount_percentage": 10.0},
+                reported_version_id="RULE-SAFE-DRIVER-v1.0",
+                approved_reference_version_id="RULE-SAFE-DRIVER-v1.0",
+                expected_version_hash="INCORRECT_HASH_ABCD1234",
+                strict_mode=True,
+            )
+            assert res["status"] == "UNVERIFIABLE"
+            assert "hash mismatch" in res["summary"].lower()
+        finally:
+            db.close()
+
+    def test_strict_mode_passes_with_correct_hash(self):
+        """In strict mode, providing the authentic computed hash must verify successfully."""
+        from app.services.snapshot_service import SnapshotService
+        from app.models.rule import RuleVersion
+
+        db = SessionLocal()
+        try:
+            rv = db.query(RuleVersion).filter_by(id="RULE-SAFE-DRIVER-v1.0").first()
+            auth_hash = SnapshotService.compute_version_hash(rv.rule_definition)
+
+            res = IntentGuardVerifier.verify_event(
+                db=db,
+                transaction_id="TXN-STRICT-GOODHASH",
+                input_data={
+                    "jurisdiction": "CA",
+                    "driver_risk_score": 15,
+                    "vehicle_category": "SEDAN",
+                    "policy_active": True,
+                },
+                observed_outcome={"eligible": True, "discount_percentage": 10.0},
+                reported_version_id="RULE-SAFE-DRIVER-v1.0",
+                approved_reference_version_id="RULE-SAFE-DRIVER-v1.0",
+                expected_version_hash=auth_hash,
+                strict_mode=True,
+            )
+            assert res["status"] == "VERIFIED"
+            assert res["is_deviation"] is False
         finally:
             db.close()

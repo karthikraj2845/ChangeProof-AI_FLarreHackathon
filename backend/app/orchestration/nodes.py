@@ -40,8 +40,25 @@ def insurance_context_node(state: WorkflowState) -> Dict[str, Any]:
     """Agent 2: Insurance Context Agent - Dynamically retrieves domain records, specifications, and versions."""
     db = SessionLocal()
     try:
-        rule_id = state.get("target_rule_id") or "RULE-SAFE-DRIVER"
+        rule_id = state.get("target_rule_id")
+        if not rule_id:
+            errors = list(state.get("errors", []))
+            errors.append("Target rule ID is missing or unresolved. Cannot load insurance context.")
+            return {
+                "errors": errors,
+                "current_stage": "insurance_context",
+                "status": "FAILED",
+            }
+
         rule = db.query(Rule).filter_by(id=rule_id).first()
+        if not rule:
+            errors = list(state.get("errors", []))
+            errors.append(f"Target rule '{rule_id}' not found in registry.")
+            return {
+                "errors": errors,
+                "current_stage": "insurance_context",
+                "status": "FAILED",
+            }
 
         # Resolve baseline and proposed versions dynamically
         baseline_id = state.get("baseline_version_id")
@@ -59,19 +76,33 @@ def insurance_context_node(state: WorkflowState) -> Dict[str, Any]:
         if not proposed_rv:
             proposed_rv = db.query(RuleVersion).filter_by(rule_id=rule_id, status="PROPOSED").order_by(RuleVersion.created_at.desc()).first()
 
-        # Find linked requirement dynamically
-        req = db.query(Requirement).first()
+        # Find linked requirement explicitly: look for tests associated with this rule that reference a requirement
+        linked_test_with_req = db.query(RegressionTest).filter(
+            RegressionTest.linked_rule_id == rule_id,
+            RegressionTest.linked_requirement_id.isnot(None),
+        ).first()
 
-        resolved_baseline = baseline_rv.id if baseline_rv else "RULE-SAFE-DRIVER-v1.0"
-        resolved_proposed = proposed_rv.id if proposed_rv else "RULE-SAFE-DRIVER-v1.1-proposed"
+        req = None
+        if linked_test_with_req and linked_test_with_req.linked_requirement_id:
+            req = db.query(Requirement).filter_by(id=linked_test_with_req.linked_requirement_id).first()
+
+        if not req:
+            # Check requirement table matching rule id or domain
+            req = db.query(Requirement).filter(
+                (Requirement.id == f"REQ-{rule_id}") |
+                (Requirement.title.ilike(f"%{rule.name}%"))
+            ).first()
+
+        resolved_baseline = baseline_rv.id if baseline_rv else None
+        resolved_proposed = proposed_rv.id if proposed_rv else None
 
         context = {
-            "rule_id": rule.id if rule else rule_id,
-            "rule_name": rule.name if rule else "Underwriting Rule",
-            "rule_type": rule.rule_type if rule else "UNDERWRITING_DISCOUNT",
-            "requirement_id": req.id if req else "REQ-AUTO-DISC-001",
-            "requirement_title": req.title if req else "Policy Specification",
-            "requirement_domain": req.domain if req else "Personal Auto",
+            "rule_id": rule.id,
+            "rule_name": rule.name,
+            "rule_type": rule.rule_type,
+            "requirement_id": req.id if req else None,
+            "requirement_title": req.title if req else None,
+            "requirement_domain": req.domain if req else None,
             "baseline_version": resolved_baseline,
             "proposed_version": resolved_proposed,
             "retrieval_mode": "STRUCTURED_DATABASE_RECORDS",
@@ -93,27 +124,41 @@ def impact_analysis_node(state: WorkflowState) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         graph_svc = InsuranceDependencyGraphService(db)
-        proposed_v_id = state.get("proposed_version_id", "RULE-SAFE-DRIVER-v1.1-proposed")
-        target_rule_id = state.get("target_rule_id", "RULE-SAFE-DRIVER")
-        cr_id = state.get("change_request_id", "CR-2026-001")
+        proposed_v_id = state.get("proposed_version_id")
+        target_rule_id = state.get("target_rule_id")
+        cr_id = state.get("change_request_id")
 
-        # Resolve starting artifact dynamically
-        source_art = graph_svc.find_artifact_for_entity(proposed_v_id)
-        if not source_art:
+        if not target_rule_id:
+            errors = list(state.get("errors", []))
+            errors.append("Cannot perform impact analysis: Target rule is unresolved.")
+            return {
+                "impacted_artifacts": [],
+                "dependency_paths": [],
+                "selected_tests": [],
+                "test_provenance": {},
+                "coverage_gaps": ["TARGET_RULE_UNRESOLVED"],
+                "errors": errors,
+                "current_stage": "impact_analysis",
+            }
+
+        # Resolve starting artifact dynamically from graph relationships
+        source_art = None
+        if proposed_v_id:
+            source_art = graph_svc.find_artifact_for_entity(proposed_v_id)
+        if not source_art and target_rule_id:
             source_art = graph_svc.find_artifact_for_entity(target_rule_id)
-        if not source_art:
-            source_art = "ART-VER-1.1" if "ART-VER-1.1" in graph_svc.graph else list(graph_svc.graph.nodes)[0]
 
-        impacted = graph_svc.get_downstream_impacted(source_art, max_depth=6)
+        impacted = graph_svc.get_downstream_impacted(source_art, max_depth=6) if source_art else []
 
         # Find paths from CR to test suite
-        cr_art = graph_svc.find_artifact_for_entity(cr_id) or "ART-CR-001"
+        cr_art = graph_svc.find_artifact_for_entity(cr_id)
         test_suites = [n for n, d in graph_svc.graph.nodes(data=True) if d.get("artifact_type") in ["REGRESSION_TEST", "TEST_SUITE"]]
         paths = []
-        for ts in test_suites:
-            found_paths = graph_svc.find_all_paths(cr_art, ts, max_depth=6)
-            if found_paths:
-                paths.extend(found_paths)
+        if cr_art:
+            for ts in test_suites:
+                found_paths = graph_svc.find_all_paths(cr_art, ts, max_depth=6)
+                if found_paths:
+                    paths.extend(found_paths)
 
         # Dynamically discover regression tests connected to impacted artifacts
         impacted_ids = [item["artifact_id"] for item in impacted]
@@ -220,9 +265,27 @@ def test_execution_node(state: WorkflowState) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         test_ids = state.get("selected_tests", [])
-        baseline_id = state.get("baseline_version_id", "RULE-SAFE-DRIVER-v1.0")
-        proposed_id = state.get("proposed_version_id", "RULE-SAFE-DRIVER-v1.1-proposed")
+        baseline_id = state.get("baseline_version_id")
+        proposed_id = state.get("proposed_version_id")
         wf_id = state.get("workflow_id", "WF-TEST")
+
+        if not baseline_id or not proposed_id:
+            errors = list(state.get("errors", []))
+            errors.append(f"Cannot execute regression tests: Baseline ({baseline_id}) or proposed ({proposed_id}) version unresolved.")
+            return {
+                "test_results": [],
+                "coverage_gaps": ["UNRESOLVED_VERSIONS"],
+                "errors": errors,
+                "current_stage": "test_execution",
+                "execution_metadata": {
+                    "total_executed": 0,
+                    "passed": 0,
+                    "regressions": 0,
+                    "failed": 0,
+                    "regressions_detected": [],
+                    "missing_coverage_tags": ["UNRESOLVED_VERSIONS"],
+                }
+            }
 
         # Run tests with verification run tracking
         test_run_res = RegressionTestRunner.run_tests(
@@ -256,8 +319,8 @@ def readiness_assessment_node(state: WorkflowState) -> Dict[str, Any]:
     impacted = state.get("impacted_artifacts", [])
     baseline_id = state.get("baseline_version_id")
     proposed_id = state.get("proposed_version_id")
-    target_rule_id = state.get("target_rule_id", "RULE-SAFE-DRIVER")
-    cr_id = state.get("change_request_id", "CR-2026-001")
+    target_rule_id = state.get("target_rule_id")
+    cr_id = state.get("change_request_id")
     wf_id = state.get("workflow_id")
     selected_tests = state.get("selected_tests", [])
 

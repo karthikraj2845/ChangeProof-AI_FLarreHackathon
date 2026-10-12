@@ -36,6 +36,8 @@ def test_langgraph_workflow_execution_and_resumption():
                 reviewer="Overriding Manager",
                 action="APPROVE",
                 justification="Attempting to force approval despite regression.",
+                snapshot_id=state["snapshot_id"],
+                snapshot_hash=state["snapshot_hash"],
             )
 
         # Resume workflow with valid rejection
