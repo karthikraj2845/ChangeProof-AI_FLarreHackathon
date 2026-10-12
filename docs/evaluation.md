@@ -20,7 +20,7 @@ This report documents measured evaluation results against the synthetic motor in
 
 ## 2. Measured Benchmark Results
 
-All metrics below reflect actual runs measured during pytest test execution (`56 passed in 5.43s`).
+All metrics below reflect actual runs measured during pytest test execution (`59 passed in 4.05s`).
 
 ### Precision, Recall, and Accuracy
 
@@ -33,7 +33,7 @@ All metrics below reflect actual runs measured during pytest test execution (`56
 | **Evidence Traceability** | 100% | **100%** (All impacted nodes linked to verified edges) | **PASSED** |
 | **IntentGuard Verification Accuracy** | 100% | **100%** (Exact discrepancy detected on NV transaction) | **PASSED** |
 | **Readiness Policy Adherence** | 100% | **100%** (Release blocked with 0 bypasses) | **PASSED** |
-| **Test Suite Pass Rate** | 100% | **100%** (56 of 56 automated tests passed) | **PASSED** |
+| **Test Suite Pass Rate** | 100% | **100%** (59 of 59 automated tests passed) | **PASSED** |
 
 ---
 
@@ -49,7 +49,7 @@ Measurements taken on local execution environment (Python 3.13, SQLite / Network
 | **Regression Test Runner (8 Scenarios)** | ~ 4.8 ms |
 | **IntentGuard Transaction Verification** | ~ 8.4 ms (includes DB audit write) |
 | **Complete LangGraph Multi-Agent Pipeline** | ~ 380 ms (heuristic mode) / ~ 2.8s (LLM mode) |
-| **Total Automated Pytest Test Suite (56 Tests)**| **5.43 seconds** |
+| **Total Automated Pytest Test Suite (59 Tests)**| **4.05 seconds** |
 
 ---
 

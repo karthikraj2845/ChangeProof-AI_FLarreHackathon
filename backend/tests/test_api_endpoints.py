@@ -59,3 +59,73 @@ def test_intentguard_simulation_endpoint():
     assert data["status"] == "DEVIATION"
     assert data["is_deviation"] is True
     assert data["finding_id"] is not None
+
+
+def test_intentguard_simulation_endpoint_strict_mode_missing_hash():
+    """In strict mode, omitting expected_version_hash returns UNVERIFIABLE via API."""
+    payload = {
+        "transaction_id": "TXN-API-SIM-STRICT-NOHASH",
+        "jurisdiction": "NV",
+        "driver_risk_score": 15,
+        "vehicle_category": "SEDAN",
+        "policy_active": True,
+        "approved_reference_version_id": "RULE-SAFE-DRIVER-v1.0",
+        "simulated_deployed_version_id": "RULE-SAFE-DRIVER-v1.1-proposed",
+        "strict_mode": True,
+    }
+    res = client.post("/api/verification/simulate", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "UNVERIFIABLE"
+    assert "expected_version_hash is mandatory" in data["summary"]
+
+
+def test_intentguard_simulation_endpoint_strict_mode_mismatched_hash():
+    """In strict mode, a mismatched expected_version_hash returns UNVERIFIABLE via API."""
+    payload = {
+        "transaction_id": "TXN-API-SIM-STRICT-BADHASH",
+        "jurisdiction": "CA",
+        "driver_risk_score": 15,
+        "vehicle_category": "SEDAN",
+        "policy_active": True,
+        "approved_reference_version_id": "RULE-SAFE-DRIVER-v1.0",
+        "simulated_deployed_version_id": "RULE-SAFE-DRIVER-v1.0",
+        "expected_version_hash": "TAMPERED_HASH_12345",
+        "strict_mode": True,
+    }
+    res = client.post("/api/verification/simulate", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "UNVERIFIABLE"
+    assert "hash mismatch" in data["summary"].lower()
+
+
+def test_intentguard_simulation_endpoint_strict_mode_verified():
+    """In strict mode, a valid expected_version_hash produces VERIFIED via API."""
+    from app.services.snapshot_service import SnapshotService
+    from app.models.rule import RuleVersion
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        rv = db.query(RuleVersion).filter_by(id="RULE-SAFE-DRIVER-v1.0").first()
+        auth_hash = SnapshotService.compute_version_hash(rv.rule_definition)
+    finally:
+        db.close()
+
+    payload = {
+        "transaction_id": "TXN-API-SIM-STRICT-PASS",
+        "jurisdiction": "CA",
+        "driver_risk_score": 15,
+        "vehicle_category": "SEDAN",
+        "policy_active": True,
+        "approved_reference_version_id": "RULE-SAFE-DRIVER-v1.0",
+        "simulated_deployed_version_id": "RULE-SAFE-DRIVER-v1.0",
+        "expected_version_hash": auth_hash,
+        "strict_mode": True,
+    }
+    res = client.post("/api/verification/simulate", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "VERIFIED"
+    assert data["is_deviation"] is False
