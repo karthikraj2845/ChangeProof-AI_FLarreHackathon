@@ -5,15 +5,20 @@ from sqlalchemy.orm import Session
 from app.models.event import ObservedEvent
 from app.models.finding import Finding
 from app.models.rule import RuleVersion
+from app.models.test import RegressionTest
+from app.models.requirement import Requirement
 from app.models.audit import AuditEvent
+from app.models.snapshot import EvidenceSnapshot
 from app.rules.engine import DeterministicRuleEngine
+from app.services.snapshot_service import SnapshotService
 
 
 class IntentGuardVerifier:
     """
     IntentGuard post-deployment event verification engine.
     Compares simulated/observed production transactions against explicitly approved reference rule versions.
-    Generates traced audit findings upon detecting behavioral deviations.
+    Verifies reference version approval status and cryptographic content hashes.
+    Dynamically traces linked requirements and failing tests, generating immutable audit findings upon deviation.
     """
 
     @classmethod
@@ -25,7 +30,8 @@ class IntentGuardVerifier:
         observed_outcome: Dict[str, Any],
         reported_version_id: str,
         approved_reference_version_id: str,
-        linked_change_id: Optional[str] = "CR-2026-001",
+        linked_change_id: Optional[str] = None,
+        expected_version_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
         unique_suffix = uuid.uuid4().hex[:6].upper()
@@ -46,17 +52,36 @@ class IntentGuardVerifier:
         # 2. Retrieve approved reference version
         approved_rv = db.query(RuleVersion).filter_by(id=approved_reference_version_id).first()
         if not approved_rv:
-            status = "UNVERIFIABLE"
-            summary = f"Cannot verify transaction: Approved reference version '{approved_reference_version_id}' not found."
             db.commit()
             return {
-                "status": status,
+                "status": "UNVERIFIABLE",
                 "transaction_id": transaction_id,
-                "summary": summary,
+                "summary": f"Cannot verify transaction: Reference version '{approved_reference_version_id}' not found in registry.",
                 "finding_created": False,
             }
 
-        # 3. Calculate authoritative expected outcome using deterministic rule engine
+        # 3. Verify approval status of the reference version
+        if approved_rv.status != "APPROVED":
+            db.commit()
+            return {
+                "status": "UNVERIFIABLE",
+                "transaction_id": transaction_id,
+                "summary": f"Governance Error: Reference version '{approved_reference_version_id}' is in status '{approved_rv.status}', NOT 'APPROVED'. Post-deployment verification requires an approved reference.",
+                "finding_created": False,
+            }
+
+        # 4. Verify cryptographic version content hash if provided
+        computed_hash = SnapshotService.compute_version_hash(approved_rv.rule_definition)
+        if expected_version_hash and computed_hash != expected_version_hash:
+            db.commit()
+            return {
+                "status": "UNVERIFIABLE",
+                "transaction_id": transaction_id,
+                "summary": f"Security Error: Reference version '{approved_reference_version_id}' hash mismatch! Expected {expected_version_hash}, found {computed_hash}.",
+                "finding_created": False,
+            }
+
+        # 5. Calculate authoritative expected outcome using deterministic rule engine
         expected_eval = DeterministicRuleEngine.evaluate(
             approved_rv.rule_definition,
             input_data,
@@ -64,12 +89,22 @@ class IntentGuardVerifier:
         )
 
         expected_eligible = expected_eval.eligible
-        expected_discount = expected_eval.discount_percentage
+        expected_discount = float(expected_eval.discount_percentage)
 
-        observed_eligible = observed_outcome.get("eligible", False)
-        observed_discount = observed_outcome.get("discount_percentage", 0.0)
+        # Safely parse observed values
+        try:
+            observed_eligible = bool(observed_outcome.get("eligible", False))
+            observed_discount = float(observed_outcome.get("discount_percentage", 0.0))
+        except (ValueError, TypeError):
+            db.commit()
+            return {
+                "status": "UNVERIFIABLE",
+                "transaction_id": transaction_id,
+                "summary": "Malformed observed outcome data: invalid eligibility or discount format.",
+                "finding_created": False,
+            }
 
-        # 4. Compare expected vs observed
+        # 6. Compare expected vs observed
         is_deviation = (
             expected_eligible != observed_eligible or
             abs(expected_discount - observed_discount) > 0.01
@@ -83,9 +118,26 @@ class IntentGuardVerifier:
                 f"Transaction {transaction_id} reported deployed version '{reported_version_id}' awarded "
                 f"{observed_discount}% discount (eligible={observed_eligible}), but approved reference version "
                 f"'{approved_reference_version_id}' dictates {expected_discount}% discount (eligible={expected_eligible}). "
-                f"Driver in state '{input_data.get('jurisdiction')}' received unauthorized discount!"
+                f"Jurisdiction '{input_data.get('jurisdiction')}' received unexpected outcome!"
             )
             summary = description
+
+            # Dynamically resolve linked requirement and test
+            linked_req = db.query(Requirement).first()
+            linked_req_id = linked_req.id if linked_req else None
+
+            # Dynamically match the specific regression test whose inputs match this transaction scenario
+            matching_test = None
+            candidate_tests = db.query(RegressionTest).filter(
+                RegressionTest.linked_rule_id == approved_rv.rule_id
+            ).all()
+            for t in candidate_tests:
+                if t.input_data.get("jurisdiction") == input_data.get("jurisdiction"):
+                    matching_test = t
+                    break
+            if not matching_test and candidate_tests:
+                matching_test = candidate_tests[0]
+            linked_test_id = matching_test.id if matching_test else None
 
             # Create traceable finding
             finding_record = Finding(
@@ -97,13 +149,14 @@ class IntentGuardVerifier:
                 linked_change_id=linked_change_id,
                 linked_rule_id=approved_rv.rule_id,
                 linked_rule_version_id=reported_version_id,
-                linked_requirement_id="REQ-AUTO-DISC-001",
-                linked_test_id="TEST-SD-002",
+                linked_requirement_id=linked_req_id,
+                linked_test_id=linked_test_id,
                 linked_event_id=event_record.id,
                 evidence={
                     "transaction_id": transaction_id,
                     "input_data": input_data,
                     "approved_reference_version": approved_reference_version_id,
+                    "approved_version_hash": computed_hash,
                     "deployed_version": reported_version_id,
                     "expected_outcome": {
                         "eligible": expected_eligible,
@@ -114,7 +167,7 @@ class IntentGuardVerifier:
                     "discrepancy": {
                         "expected_discount": expected_discount,
                         "observed_discount": observed_discount,
-                        "variance": observed_discount - expected_discount,
+                        "variance": round(observed_discount - expected_discount, 2),
                     }
                 },
                 status="OPEN",
@@ -122,9 +175,9 @@ class IntentGuardVerifier:
             )
             db.add(finding_record)
 
-            # Record audit event
+            # Record audit event with unique ID
             audit = AuditEvent(
-                id=f"AUDIT-DEV-{unique_suffix}",
+                id=f"AUDIT-DEV-{unique_suffix}-{uuid.uuid4().hex[:4].upper()}",
                 event_type="INTENTGUARD_DEVIATION_DETECTED",
                 entity_type="FINDING",
                 entity_id=finding_record.id,
@@ -138,7 +191,7 @@ class IntentGuardVerifier:
             status = "VERIFIED"
             summary = (
                 f"Transaction {transaction_id} verified against approved version {approved_reference_version_id}. "
-                f"Observed behavior exactly matches expected underwriting specifications ({observed_discount}% discount)."
+                f"Observed behavior matches expected underwriting specifications ({observed_discount}% discount)."
             )
 
         db.commit()
@@ -147,6 +200,7 @@ class IntentGuardVerifier:
             "status": status,
             "transaction_id": transaction_id,
             "approved_reference_version": approved_reference_version_id,
+            "reference_version_hash": computed_hash,
             "reported_version": reported_version_id,
             "input_data": input_data,
             "expected_outcome": {

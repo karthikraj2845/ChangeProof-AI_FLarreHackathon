@@ -19,10 +19,12 @@ class WorkflowState(TypedDict, total=False):
     coverage_gaps: List[str]
     risk_findings: List[Dict[str, Any]]
     readiness_result: Dict[str, Any]
+    snapshot_id: Optional[str]
+    snapshot_hash: Optional[str]
     human_review_decision: Optional[Dict[str, Any]]
     verification_result: Optional[Dict[str, Any]]
     current_stage: str
-    status: str  # RUNNING, PAUSED_FOR_REVIEW, COMPLETED, FAILED, BLOCKED
+    status: str  # RUNNING, PAUSED_FOR_REVIEW, NEEDS_HUMAN_REVIEW, READY_FOR_REVIEW, REJECTED, REVISION_REQUIRED, BLOCKED, COMPLETED, FAILED
     errors: List[str]
     warnings: List[str]
     execution_metadata: Dict[str, Any]

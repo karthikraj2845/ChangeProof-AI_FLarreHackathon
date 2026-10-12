@@ -40,7 +40,7 @@ class DeterministicReadinessPolicy:
             blockers.append(f"BLOCKED BY TEST FAILURE: {failed} test(s) failed against baseline specification.")
 
         # 4. Mandatory coverage gaps
-        missing_tags = test_summary.get("missing_coverage_tags", [])
+        missing_tags = test_summary.get("missing_coverage_tags") or []
         if missing_tags:
             warnings.append(f"Coverage gap: missing mandatory scenario tags: {', '.join(missing_tags)}")
             human_review_triggers.append(f"Unverified underwriting scenarios: {', '.join(missing_tags)}")
@@ -72,7 +72,12 @@ class DeterministicReadinessPolicy:
                 "Ready for formal Human Review Gate."
             )
 
-        evidence_completeness_pct = 100.0 if not missing_tags and not blockers else max(100.0 - (len(blockers) * 35 + len(warnings) * 15), 10.0)
+        # Evidence completeness score: 100% only if no blockers, no missing tags, and no warnings
+        if not blockers and not missing_tags and not warnings:
+            evidence_completeness_pct = 100.0
+        else:
+            penalty = len(blockers) * 35 + len(warnings) * 15 + len(missing_tags) * 10
+            evidence_completeness_pct = max(100.0 - penalty, 10.0)
 
         return {
             "status": status,

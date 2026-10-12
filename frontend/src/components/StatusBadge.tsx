@@ -5,9 +5,10 @@ interface StatusBadgeProps {
   size?: 'sm' | 'md' | 'lg';
 }
 
-export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
+export const StatusBadge: React.FC<StatusBadgeProps> = ({ status = 'UNKNOWN', size = 'md' }) => {
+  const safeStatus = status || 'UNKNOWN';
   const getColors = () => {
-    switch (status) {
+    switch (safeStatus) {
       case 'PASSED':
       case 'VERIFIED':
       case 'APPROVED':
@@ -22,6 +23,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' })
       case 'NEEDS_HUMAN_REVIEW':
       case 'PAUSED_FOR_REVIEW':
       case 'REVIEW_REQUIRED':
+      case 'REVISION_REQUIRED':
       case 'HIGH':
         return 'bg-amber-950/70 text-amber-400 border-amber-700/60';
       case 'RUNNING':
@@ -44,7 +46,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' })
       className={`inline-flex items-center font-mono font-medium rounded-full border ${sizeClasses} ${getColors()}`}
     >
       <span className="w-1.5 h-1.5 rounded-full mr-1.5 bg-current opacity-80" />
-      {status.replace(/_/g, ' ')}
+      {safeStatus.replace(/_/g, ' ')}
     </span>
   );
 };

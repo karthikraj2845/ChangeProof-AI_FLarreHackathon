@@ -66,7 +66,7 @@ class RegressionTestRunner:
             failure_reason = None
 
             # Detect behavioral regression:
-            # Baseline rejected/disallowed discount, but proposed version allowed it (unexpected behavioral shift)
+            # Case A: Baseline rejected/disallowed discount, but proposed version incorrectly allowed it
             if not base_eval.eligible and prop_eval.eligible:
                 is_regression = True
                 status = "REGRESSION"
@@ -84,6 +84,28 @@ class RegressionTestRunner:
                     "baseline_outcome": base_eval.model_dump(),
                     "proposed_outcome": prop_eval.model_dump(),
                 })
+            # Case B: Baseline granted discount, but proposed version unintentionally revoked it (unless explicitly expected)
+            elif base_eval.eligible and not prop_eval.eligible and (not test.expected_proposed_outcome or test.expected_proposed_outcome.get("eligible") is not False):
+                is_regression = True
+                status = "REGRESSION"
+                regression_count += 1
+                failure_reason = (
+                    f"CRITICAL BEHAVIORAL REGRESSION: Input '{test.name}' was ELIGIBLE under baseline {baseline_version_id} "
+                    f"({base_eval.discount_percentage}% discount), but unexpectedly failed under proposed {proposed_version_id}! "
+                    f"Reason: {prop_eval.explanation}"
+                )
+                regressions_detected.append({
+                    "test_id": test.id,
+                    "test_name": test.name,
+                    "reason": failure_reason,
+                    "input_data": test.input_data,
+                    "baseline_outcome": base_eval.model_dump(),
+                    "proposed_outcome": prop_eval.model_dump(),
+                })
+            elif test.expected_proposed_outcome and test.expected_proposed_outcome.get("eligible") != prop_eval.eligible:
+                status = "FAILED"
+                failed_count += 1
+                failure_reason = f"Proposed outcome mismatch with expected proposed specification ({prop_eval.explanation})."
             elif test.expected_baseline_outcome.get("eligible") != base_eval.eligible:
                 status = "FAILED"
                 failed_count += 1

@@ -6,6 +6,7 @@ from app.db.session import SessionLocal
 from app.models.change import ChangeRequest
 from app.models.workflow import WorkflowRun
 from app.models.audit import AuditEvent
+from app.services.snapshot_service import SnapshotService
 from app.orchestration.graph_builder import change_assurance_app
 from app.orchestration.state import WorkflowState
 
@@ -20,10 +21,10 @@ def serialize_for_json(obj: Any) -> Any:
     return obj
 
 
-
 class WorkflowRunner:
     """
     Manages workflow execution lifecycle, persistence, state transitions, and audit records.
+    Coordinates genuine LangGraph resumption, durable checkpointing, and cryptographic governance.
     """
 
     @classmethod
@@ -54,7 +55,7 @@ class WorkflowRunner:
         db.add(wf_record)
 
         audit = AuditEvent(
-            id=f"AUDIT-WF-START-{workflow_id}",
+            id=f"AUDIT-WF-START-{workflow_id}-{uuid.uuid4().hex[:4].upper()}",
             event_type="WORKFLOW_STARTED",
             entity_type="WORKFLOW_RUN",
             entity_id=workflow_id,
@@ -85,16 +86,29 @@ class WorkflowRunner:
         final_state = change_assurance_app.invoke(initial_state, config=config)
 
         # 4. Update workflow run record in DB
-        wf_record.status = final_state.get("status", "COMPLETED")
-        wf_record.current_node = final_state.get("current_stage", "completed")
+        wf_record.status = final_state.get("status", "PAUSED_FOR_REVIEW")
+        wf_record.current_node = final_state.get("current_stage", "readiness_assessment")
         wf_record.state_json = serialize_for_json(dict(final_state))
-        if wf_record.status in ["COMPLETED", "BLOCKED"]:
-            wf_record.completion_time = datetime.now(timezone.utc)
+        db.commit()
 
+        # Record audit event for pause
+        pause_audit = AuditEvent(
+            id=f"AUDIT-WF-PAUSE-{workflow_id}-{uuid.uuid4().hex[:4].upper()}",
+            event_type="WORKFLOW_PAUSED_AT_GATE",
+            entity_type="WORKFLOW_RUN",
+            entity_id=workflow_id,
+            actor="SYSTEM",
+            details={
+                "status": wf_record.status,
+                "snapshot_id": final_state.get("snapshot_id"),
+                "readiness": final_state.get("readiness_result", {}).get("status"),
+            },
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(pause_audit)
         db.commit()
 
         return dict(final_state)
-
 
     @classmethod
     def resume_with_review(
@@ -102,47 +116,99 @@ class WorkflowRunner:
         db: Session,
         workflow_id: str,
         reviewer: str,
-        action: str,  # APPROVE, REJECT, REQUEST_MORE_TESTS
+        action: str,  # APPROVE, REJECT, REQUEST_MORE_TESTS, REVISION_REQUIRED
         justification: str,
+        snapshot_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """
+        Resumes the paused LangGraph workflow from its checkpoint after validating
+        evidence snapshot integrity and enforcing strict release readiness governance.
+        """
         wf_record = db.query(WorkflowRun).filter_by(id=workflow_id).first()
         if not wf_record:
             raise ValueError(f"Workflow run {workflow_id} not found.")
 
+        # Prevent duplicate submissions
+        if wf_record.status in ["APPROVED", "REJECTED", "REVISION_REQUIRED"] and wf_record.completion_time is not None:
+            raise ValueError(f"Workflow {workflow_id} has already concluded with status '{wf_record.status}'. Cannot submit duplicate review.")
+
+        state = dict(wf_record.state_json or {})
+        readiness = state.get("readiness_result", {})
+        is_blocked = readiness.get("is_blocked", False) or readiness.get("status") == "BLOCKED"
+
+        normalized_action = action.upper()
+        if normalized_action == "REQUEST_MORE_TESTS":
+            normalized_action = "REVISION_REQUIRED"
+
+        # Governance Rule 1: Ordinary human approval CANNOT override a failed regression suite
+        if normalized_action == "APPROVE" and is_blocked:
+            raise ValueError(
+                "GOVERNANCE VIOLATION: Cannot approve change. Release is strictly BLOCKED by deterministic "
+                "readiness policy due to behavioral regressions or test failures."
+            )
+
+        # Governance Rule 2: Verify Evidence Snapshot Integrity and Freshness
+        effective_snapshot_id = snapshot_id or state.get("snapshot_id")
+        if effective_snapshot_id:
+            validity = SnapshotService.verify_snapshot_validity(db, effective_snapshot_id)
+            if not validity["valid"]:
+                raise ValueError(f"STALE OR INVALID EVIDENCE: {validity.get('reason')}")
+
         now = datetime.now(timezone.utc)
         decision = {
             "reviewer": reviewer,
-            "action": action,
+            "action": normalized_action,
             "justification": justification,
+            "snapshot_id": effective_snapshot_id,
             "timestamp": now.isoformat(),
         }
 
-        # Fetch state from record
-        state = dict(wf_record.state_json or {})
-        state["human_review_decision"] = decision
-        state["status"] = "APPROVED" if action == "APPROVE" else "REJECTED"
-        state["current_stage"] = "human_review_gate"
+        # 1. Update LangGraph checkpoint state via update_state
+        config = {"configurable": {"thread_id": workflow_id}}
+        change_assurance_app.update_state(
+            config,
+            {"human_review_decision": decision},
+            as_node="readiness_assessment",
+        )
 
-        wf_record.status = state["status"]
-        wf_record.state_json = serialize_for_json(state)
+        # 2. Resume execution across the human_review_gate node to END
+        resumed_state = change_assurance_app.invoke(None, config=config)
+
+        # 3. Determine final status
+        final_status = resumed_state.get("status", "COMPLETED")
+        if normalized_action == "APPROVE" and not is_blocked:
+            db_status = "APPROVED"
+        elif normalized_action == "REJECT":
+            db_status = "REJECTED"
+        elif normalized_action in ["REVISION_REQUIRED", "REQUEST_MORE_TESTS"]:
+            db_status = "REVISION_REQUIRED"
+        else:
+            db_status = "BLOCKED"
+
+        resumed_state["status"] = db_status
+
+        # 4. Update DB workflow record
+        wf_record.status = db_status
+        wf_record.current_node = resumed_state.get("current_stage", "human_review_gate")
+        wf_record.state_json = serialize_for_json(dict(resumed_state))
         wf_record.completion_time = now
 
-
-        # Update change request status
+        # 5. Update ChangeRequest record
         cr = db.query(ChangeRequest).filter_by(id=wf_record.change_request_id).first()
         if cr:
-            cr.status = "APPROVED" if action == "APPROVE" else "REJECTED"
+            cr.status = db_status
 
+        # 6. Record Audit Event
         audit = AuditEvent(
-            id=f"AUDIT-REV-{uuid.uuid4().hex[:6]}",
-            event_type=f"HUMAN_REVIEW_{action}",
+            id=f"AUDIT-REV-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+            event_type=f"HUMAN_REVIEW_{normalized_action}",
             entity_type="WORKFLOW_RUN",
             entity_id=workflow_id,
             actor=reviewer,
-            details=decision,
+            details={**decision, "resulting_status": db_status},
             timestamp=now,
         )
         db.add(audit)
         db.commit()
 
-        return state
+        return dict(resumed_state)

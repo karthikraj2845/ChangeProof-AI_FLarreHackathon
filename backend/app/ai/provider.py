@@ -62,28 +62,51 @@ class AIProvider:
         # Deterministic Heuristic Insurance Parser
         text_lower = user_text.lower()
         target_rule = "RULE-SAFE-DRIVER"
-        operation = "MODIFY_RULE"
+        operation = "UNKNOWN"
         condition_field = "unknown"
         ambiguity = False
+        target_value = None
 
-        if "jurisdiction" in text_lower or "state" in text_lower:
+        # Check for explicit target rule mention if present
+        if "rule-safe-driver" in text_lower or "safe driver" in text_lower or "safe-driver" in text_lower:
+            target_rule = "RULE-SAFE-DRIVER"
+
+        # Check for ambiguity: empty or excessively vague request
+        if len(user_text.strip()) < 10 or ("change" in text_lower and len(text_lower.split()) <= 2):
+            ambiguity = True
+            operation = "AMBIGUOUS_REQUEST"
+        elif "jurisdiction" in text_lower or "state" in text_lower:
             condition_field = "jurisdiction"
-            if "remove" in text_lower or "drop" in text_lower or "delete" in text_lower:
+            if any(w in text_lower for w in ["remove", "drop", "delete", "omit", "exclude"]):
                 operation = "REMOVE_CONDITION"
-        elif "risk score" in text_lower or "driver score" in text_lower:
+            elif any(w in text_lower for w in ["add", "include", "expand to"]):
+                operation = "ADD_CONDITION"
+            else:
+                operation = "MODIFY_CONDITION"
+        elif "risk score" in text_lower or "driver score" in text_lower or "telematics" in text_lower:
             condition_field = "driver_risk_score"
             operation = "MODIFY_THRESHOLD"
-        elif "vehicle" in text_lower:
+        elif "vehicle" in text_lower or "car" in text_lower or "sedan" in text_lower:
             condition_field = "vehicle_category"
             operation = "MODIFY_CONDITION"
+        elif "policy" in text_lower or "active" in text_lower or "status" in text_lower:
+            condition_field = "policy_active"
+            operation = "MODIFY_CONDITION"
+        else:
+            ambiguity = True
+            operation = "UNSUPPORTED_OPERATION"
+            condition_field = "unknown"
+
+        confidence = 0.98 if (condition_field != "unknown" and not ambiguity) else (0.20 if ambiguity else 0.40)
 
         return {
             "target_rule": target_rule,
             "operation": operation,
             "condition_field": condition_field,
-            "description": f"Parsed intent: {operation} on field '{condition_field}' for rule {target_rule}.",
+            "target_value": target_value,
+            "description": f"Parsed intent: {operation} on field '{condition_field}' for rule {target_rule}." if not ambiguity else "Ambiguous or unsupported change request.",
             "ambiguity_flag": ambiguity,
-            "confidence": 0.98 if condition_field != "unknown" else 0.40,
+            "confidence": confidence,
             "provider_mode": "LLM" if (self.has_llm and self.client) else "HEURISTIC_OFFLINE_CAPABLE",
         }
 

@@ -52,14 +52,16 @@ class StartWorkflowRequest(BaseModel):
 
 class ResumeWorkflowRequest(BaseModel):
     reviewer: str = "Underwriting Director"
-    action: str = "APPROVE"  # APPROVE, REJECT, REQUEST_MORE_TESTS
+    action: str = "APPROVE"  # APPROVE, REJECT, REQUEST_MORE_TESTS, REVISION_REQUIRED
     justification: str
+    snapshot_id: Optional[str] = None
 
 
 # Human Review
 class HumanReviewDecisionRequest(BaseModel):
     reviewer: str
     justification: str
+    snapshot_id: Optional[str] = None
 
 
 # Verification & Simulation

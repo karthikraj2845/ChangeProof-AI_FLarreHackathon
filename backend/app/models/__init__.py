@@ -9,6 +9,8 @@ from app.models.event import ObservedEvent
 from app.models.finding import Finding
 from app.models.audit import AuditEvent
 
+from app.models.snapshot import EvidenceSnapshot
+
 __all__ = [
     "Base",
     "Requirement",
@@ -24,4 +26,5 @@ __all__ = [
     "ObservedEvent",
     "Finding",
     "AuditEvent",
+    "EvidenceSnapshot",
 ]

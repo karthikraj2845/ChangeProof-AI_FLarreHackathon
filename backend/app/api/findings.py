@@ -79,8 +79,9 @@ def update_finding(finding_id: str, payload: FindingUpdateRequest, db: Session =
     old_status = f.status
     f.status = payload.status
 
+    unique_id = uuid.uuid4().hex[:6].upper()
     audit = AuditEvent(
-        id=f"AUDIT-FND-{finding_id[-6:]}",
+        id=f"AUDIT-FND-{finding_id[-6:]}-{unique_id}",
         event_type="FINDING_STATUS_UPDATED",
         entity_type="FINDING",
         entity_id=finding_id,

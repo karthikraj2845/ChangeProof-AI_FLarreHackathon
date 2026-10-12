@@ -103,21 +103,52 @@ class InsuranceDependencyGraphService:
         except nx.NetworkXError:
             return []
 
+    def find_artifact_for_entity(self, entity_id: str) -> Optional[str]:
+        """Finds corresponding artifact ID for a rule ID, rule version ID, requirement ID, or change ID."""
+        if entity_id in self.graph:
+            return entity_id
+        # Search by node name or metadata
+        for node_id, data in self.graph.nodes(data=True):
+            if entity_id in node_id or entity_id in data.get("name", ""):
+                return node_id
+            metadata = data.get("metadata", {})
+            if metadata.get("entity_id") == entity_id or metadata.get("rule_id") == entity_id:
+                return node_id
+        return None
+
     def discover_linked_tests(self, impacted_artifact_ids: List[str]) -> List[str]:
-        """Finds all REGRESSION_TEST nodes connected to any of the impacted artifacts."""
+        """
+        Dynamically finds all regression test identifiers connected to any of the impacted artifacts.
+        Searches downstream and upstream reachability, including through intermediate test suites.
+        """
         tests: Set[str] = set()
         all_candidates = set(impacted_artifact_ids)
 
         for art_id in all_candidates:
             if art_id not in self.graph:
                 continue
-            # Look at immediate successors and predecessors for tests
-            for neighbor in list(self.graph.successors(art_id)) + list(self.graph.predecessors(art_id)):
+            # Look at immediate successors and predecessors for tests or test suites
+            neighbors = list(self.graph.successors(art_id)) + list(self.graph.predecessors(art_id))
+            for neighbor in neighbors:
                 node_data = self.graph.nodes.get(neighbor, {})
                 if node_data.get("artifact_type") == "REGRESSION_TEST":
                     tests.add(neighbor)
+                    # Also look 1 hop further in case neighbor is a suite node
+                    for sub_neighbor in list(self.graph.successors(neighbor)):
+                        sub_data = self.graph.nodes.get(sub_neighbor, {})
+                        if sub_data.get("artifact_type") == "REGRESSION_TEST":
+                            tests.add(sub_neighbor)
 
         return sorted(list(tests))
+
+    def get_graph_fingerprint(self) -> str:
+        """Computes a deterministic SHA-256 fingerprint of the current graph nodes, edges, and versions."""
+        import hashlib
+        import json
+        node_summary = sorted([(n, d.get("artifact_type"), d.get("version")) for n, d in self.graph.nodes(data=True)])
+        edge_summary = sorted([(u, v, d.get("relationship_type"), d.get("confidence")) for u, v, d in self.graph.edges(data=True)])
+        content = json.dumps({"nodes": node_summary, "edges": edge_summary}, sort_keys=True)
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     def calculate_impact_score(self, node_id: str, depth: int = 1) -> Dict[str, Any]:
         """

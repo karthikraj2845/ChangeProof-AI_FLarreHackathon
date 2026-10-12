@@ -1,5 +1,10 @@
+import os
+import sqlite3
+from typing import Optional
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.memory import MemorySaver
+from app.config import settings
 from app.orchestration.state import WorkflowState
 from app.orchestration.nodes import (
     change_understanding_node,
@@ -12,10 +17,35 @@ from app.orchestration.nodes import (
 )
 
 
-def build_change_assurance_graph():
+def get_checkpointer():
+    """
+    Returns a persistent checkpointer.
+    Uses SqliteSaver backed by a persistent file for durability across process restarts.
+    Falls back to MemorySaver if file access fails.
+    """
+    try:
+        # Determine checkpointer db path
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        db_path = os.path.join(base_dir, "changeproof_checkpoints.db")
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        saver = SqliteSaver(conn)
+        saver.setup()
+        return saver
+    except Exception as e:
+        print(f"Warning: Failed to initialize SqliteSaver ({e}), falling back to MemorySaver.")
+        return MemorySaver()
+
+
+# Global checkpointer instance shared across workflow invocations
+workflow_checkpointer = get_checkpointer()
+
+
+def build_change_assurance_graph(checkpointer=None):
     """
     Constructs the LangGraph change assurance workflow.
-    Configures typed state transitions, checkpointing, and human review pause gates.
+    Configures typed state transitions, checkpointing, and real human review pause gates.
+    Uses interrupt_before=['human_review_gate'] so execution pauses immediately after
+    readiness assessment, and only resumes when an authorized human decision is submitted.
     """
     workflow = StateGraph(WorkflowState)
 
@@ -28,7 +58,7 @@ def build_change_assurance_graph():
     workflow.add_node("readiness_assessment", readiness_assessment_node)
     workflow.add_node("human_review_gate", human_review_pause_node)
 
-    # 2. Add sequential and conditional transitions
+    # 2. Add sequential transitions
     workflow.add_edge(START, "change_understanding")
     workflow.add_edge("change_understanding", "insurance_context")
     workflow.add_edge("insurance_context", "impact_analysis")
@@ -38,9 +68,12 @@ def build_change_assurance_graph():
     workflow.add_edge("readiness_assessment", "human_review_gate")
     workflow.add_edge("human_review_gate", END)
 
-    # 3. Checkpointing for durability & resumability
-    checkpointer = MemorySaver()
-    app = workflow.compile(checkpointer=checkpointer)
+    # 3. Checkpointing and human review interruption
+    active_checkpointer = checkpointer or workflow_checkpointer
+    app = workflow.compile(
+        checkpointer=active_checkpointer,
+        interrupt_before=["human_review_gate"],
+    )
     return app
 
 

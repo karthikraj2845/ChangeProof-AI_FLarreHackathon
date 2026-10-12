@@ -125,29 +125,29 @@ export const DashboardPage: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           title="Change Requests"
-          value={summary?.total_change_requests ?? 1}
-          subtitle="1 active demonstration proposal"
+          value={summary?.total_change_requests ?? 0}
+          subtitle="Proposals in governance pipeline"
           icon={GitPullRequest}
           variant="default"
         />
         <MetricCard
           title="Seeded Regressions"
-          value={summary?.seeded_regressions_detected ?? 1}
-          subtitle="TEST-SD-002 flagged by rule engine"
+          value={summary?.seeded_regressions_detected ?? 0}
+          subtitle="Behavioral regressions detected"
           icon={AlertOctagon}
           variant="danger"
         />
         <MetricCard
           title="Blocked Releases"
-          value={summary?.blocked_releases ?? 1}
-          subtitle="Deterministic policy prevented deployment"
+          value={summary?.blocked_releases ?? 0}
+          subtitle="Deterministic policy gates active"
           icon={TrendingDown}
           variant="warning"
         />
         <MetricCard
           title="Open Findings (IntentGuard)"
-          value={summary?.open_findings ?? 1}
-          subtitle="Traceable post-deployment deviation"
+          value={summary?.open_findings ?? 0}
+          subtitle="Post-deployment verification findings"
           icon={Radio}
           variant="danger"
         />

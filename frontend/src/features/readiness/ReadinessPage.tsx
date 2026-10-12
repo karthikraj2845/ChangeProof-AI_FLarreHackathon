@@ -107,6 +107,26 @@ export const ReadinessPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Cryptographic Evidence Snapshot Card */}
+        {((readiness as any)?.snapshot_id || (readiness as any)?.snapshot_hash) && (
+          <div className="p-4 rounded-xl border border-sky-900/60 bg-sky-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
+            <div>
+              <span className="text-sky-400 font-bold block uppercase tracking-wider">
+                Cryptographic Evidence Snapshot Bound
+              </span>
+              <span className="text-slate-300">
+                Snapshot ID: <span className="text-white font-bold">{(readiness as any)?.snapshot_id}</span>
+              </span>
+            </div>
+            <div className="text-left sm:text-right">
+              <span className="text-slate-400 block text-[10px] uppercase">SHA-256 State Fingerprint</span>
+              <span className="text-sky-300 text-[11px] break-all font-mono">
+                {(readiness as any)?.snapshot_hash ? `${(readiness as any)?.snapshot_hash.slice(0, 24)}...` : 'VERIFIED'}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Hard Blockers List */}
         <div className="p-5 rounded-xl border border-rose-900/80 bg-rose-950/30 space-y-3">
           <div className="flex items-center space-x-2 text-xs font-bold uppercase tracking-wider text-rose-400 font-mono">
