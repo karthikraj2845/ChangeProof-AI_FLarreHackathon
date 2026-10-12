@@ -42,6 +42,7 @@ class SnapshotService:
         impacted_artifacts: List[Dict[str, Any]],
         selected_test_ids: List[str],
         readiness_result: Dict[str, Any],
+        test_provenance: Optional[Dict[str, Any]] = None,
     ) -> EvidenceSnapshot:
         """
         Constructs an immutable EvidenceSnapshot, calculates its cryptographic hash,
@@ -70,6 +71,7 @@ class SnapshotService:
             "proposed_version_hash": proposed_hash,
             "graph_fingerprint": graph_fingerprint,
             "selected_test_ids": sorted(selected_test_ids),
+            "test_provenance": test_provenance or {},
             "impacted_artifact_ids": sorted(impacted_ids),
             "test_summary": {
                 "total_executed": test_summary.get("total_executed", 0),
@@ -121,18 +123,35 @@ class SnapshotService:
         cls,
         db: Session,
         snapshot_id: str,
+        expected_workflow_run_id: Optional[str] = None,
+        expected_change_request_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Validates that an existing snapshot is cryptographically intact and has not become stale.
         Checks:
           1. Snapshot exists and its data reproduces the snapshot_hash.
-          2. Baseline rule version has not changed.
-          3. Proposed rule version has not changed.
-          4. Graph dependencies have not changed (graph_fingerprint matches).
+          2. Snapshot belongs to the expected workflow run / change request.
+          3. Baseline rule version has not changed.
+          4. Proposed rule version has not changed.
+          5. Graph dependencies have not changed (graph_fingerprint matches).
         """
         snapshot = db.query(EvidenceSnapshot).filter_by(id=snapshot_id).first()
         if not snapshot:
             return {"valid": False, "stale": False, "reason": f"Snapshot '{snapshot_id}' does not exist."}
+
+        # Validate workflow / change isolation
+        if expected_workflow_run_id and snapshot.workflow_run_id and snapshot.workflow_run_id != expected_workflow_run_id:
+            return {
+                "valid": False,
+                "stale": False,
+                "reason": f"Cross-run collision: Snapshot '{snapshot_id}' belongs to workflow '{snapshot.workflow_run_id}', not '{expected_workflow_run_id}'.",
+            }
+        if expected_change_request_id and snapshot.change_request_id != expected_change_request_id:
+            return {
+                "valid": False,
+                "stale": False,
+                "reason": f"Cross-change collision: Snapshot '{snapshot_id}' belongs to change '{snapshot.change_request_id}', not '{expected_change_request_id}'.",
+            }
 
         # 1. Verify snapshot hash integrity
         recomputed_hash = cls.compute_sha256(snapshot.full_snapshot_data)

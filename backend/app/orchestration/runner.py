@@ -142,16 +142,56 @@ class WorkflowRunner:
 
         # Governance Rule 1: Ordinary human approval CANNOT override a failed regression suite
         if normalized_action == "APPROVE" and is_blocked:
+            denial_audit = AuditEvent(
+                id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+                event_type="APPROVAL_ATTEMPT_DENIED_REGRESSION_BLOCK",
+                entity_type="WORKFLOW_RUN",
+                entity_id=workflow_id,
+                actor=reviewer,
+                details={"action": normalized_action, "justification": justification, "reason": "Deterministic policy blocker active"},
+                timestamp=datetime.now(timezone.utc),
+            )
+            db.add(denial_audit)
+            db.commit()
             raise ValueError(
                 "GOVERNANCE VIOLATION: Cannot approve change. Release is strictly BLOCKED by deterministic "
                 "readiness policy due to behavioral regressions or test failures."
             )
 
-        # Governance Rule 2: Verify Evidence Snapshot Integrity and Freshness
+        # Governance Rule 2: Verify Evidence Snapshot Integrity, Freshness, and Run Isolation
         effective_snapshot_id = snapshot_id or state.get("snapshot_id")
+        if not effective_snapshot_id and normalized_action == "APPROVE":
+            denial_audit = AuditEvent(
+                id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+                event_type="APPROVAL_ATTEMPT_DENIED_NO_SNAPSHOT",
+                entity_type="WORKFLOW_RUN",
+                entity_id=workflow_id,
+                actor=reviewer,
+                details={"action": normalized_action, "justification": justification, "reason": "No evidence snapshot bound"},
+                timestamp=datetime.now(timezone.utc),
+            )
+            db.add(denial_audit)
+            db.commit()
+            raise ValueError("GOVERNANCE VIOLATION: Cannot approve change without a valid, persisted Evidence Snapshot.")
         if effective_snapshot_id:
-            validity = SnapshotService.verify_snapshot_validity(db, effective_snapshot_id)
+            validity = SnapshotService.verify_snapshot_validity(
+                db=db,
+                snapshot_id=effective_snapshot_id,
+                expected_workflow_run_id=workflow_id,
+                expected_change_request_id=wf_record.change_request_id,
+            )
             if not validity["valid"]:
+                denial_audit = AuditEvent(
+                    id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+                    event_type="APPROVAL_ATTEMPT_DENIED_INVALID_EVIDENCE",
+                    entity_type="WORKFLOW_RUN",
+                    entity_id=workflow_id,
+                    actor=reviewer,
+                    details={"action": normalized_action, "justification": justification, "reason": validity.get("reason"), "snapshot_id": effective_snapshot_id},
+                    timestamp=datetime.now(timezone.utc),
+                )
+                db.add(denial_audit)
+                db.commit()
                 raise ValueError(f"STALE OR INVALID EVIDENCE: {validity.get('reason')}")
 
         now = datetime.now(timezone.utc)

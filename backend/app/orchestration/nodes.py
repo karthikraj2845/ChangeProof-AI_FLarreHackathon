@@ -119,27 +119,73 @@ def impact_analysis_node(state: WorkflowState) -> Dict[str, Any]:
         impacted_ids = [item["artifact_id"] for item in impacted]
         discovered_test_artifacts = graph_svc.discover_linked_tests(impacted_ids)
 
-        # Resolve actual DB test IDs linked to rule or discovered suites
-        query_rule_id = target_rule_id
-        db_tests = db.query(RegressionTest).filter(RegressionTest.linked_rule_id == query_rule_id).all()
-        selected_test_ids = [t.id for t in db_tests]
+        # Build provenance mapping for every test
+        test_provenance: Dict[str, Dict[str, Any]] = {}
 
-        # Ensure mandatory safety/invariant tests are included
-        mandatory_safety_tests = ["TEST-SD-001", "TEST-SD-002", "TEST-SD-007"]
-        all_candidate_tests = list(dict.fromkeys(selected_test_ids + mandatory_safety_tests))
-        
-        # Verify candidate tests exist in database
-        valid_tests = db.query(RegressionTest.id).filter(RegressionTest.id.in_(all_candidate_tests)).all()
-        final_selected_tests = sorted([t[0] for t in valid_tests])
+        # 1. Tests linked via graph test suites/artifacts
+        for test_art_id in discovered_test_artifacts:
+            # Check if this artifact directly represents a RegressionTest ID in DB
+            db_test = db.query(RegressionTest).filter_by(id=test_art_id).first()
+            if db_test:
+                test_provenance[db_test.id] = {
+                    "source": "GRAPH_DEPENDENCY",
+                    "artifact_id": test_art_id,
+                    "target_rule_id": target_rule_id,
+                    "reason": f"Discovered directly via graph edge connected to {test_art_id}",
+                }
 
-        # If no tests exist in DB, fallback to all tests in DB
+        # 2. Tests linked directly to the target rule in the database
+        db_rule_tests = db.query(RegressionTest).filter(RegressionTest.linked_rule_id == target_rule_id).all()
+        for t in db_rule_tests:
+            if t.id not in test_provenance:
+                test_provenance[t.id] = {
+                    "source": "RULE_DIRECT_LINK",
+                    "target_rule_id": target_rule_id,
+                    "reason": f"Authoritative test registered for rule {target_rule_id}",
+                }
+
+        # 3. Tests linked to requirements in the impacted blast radius
+        impacted_req_ids = [
+            item["artifact_id"] for item in impacted
+            if item.get("artifact_type") == "REQUIREMENT" or item.get("name", "").startswith("REQ-")
+        ]
+        if impacted_req_ids:
+            req_tests = db.query(RegressionTest).filter(RegressionTest.linked_requirement_id.in_(impacted_req_ids)).all()
+            for t in req_tests:
+                if t.id not in test_provenance:
+                    test_provenance[t.id] = {
+                        "source": "REQUIREMENT_TRACEABILITY",
+                        "target_rule_id": target_rule_id,
+                        "reason": f"Traceable to impacted requirement {t.linked_requirement_id}",
+                    }
+
+        # 4. Mandatory safety/invariant baseline tests for target rule (if present in DB)
+        candidate_mandatory = ["TEST-SD-001", "TEST-SD-002", "TEST-SD-007"]
+        mandatory_in_db = db.query(RegressionTest).filter(
+            RegressionTest.id.in_(candidate_mandatory),
+            RegressionTest.linked_rule_id == target_rule_id
+        ).all()
+        for m in mandatory_in_db:
+            if m.id not in test_provenance:
+                test_provenance[m.id] = {
+                    "source": "MANDATORY_INVARIANT_SAFETY",
+                    "target_rule_id": target_rule_id,
+                    "reason": "Mandatory safety baseline/boundary invariant for rule",
+                }
+
+        final_selected_tests = sorted(list(test_provenance.keys()))
+
+        # If no tests discovered at all, report coverage gap
+        coverage_gaps = list(state.get("coverage_gaps", []))
         if not final_selected_tests:
-            final_selected_tests = [t.id for t in db.query(RegressionTest).all()]
+            coverage_gaps.append(f"No regression tests mapped to rule '{target_rule_id}' or its impacted dependencies.")
 
         return {
             "impacted_artifacts": impacted,
             "dependency_paths": paths,
             "selected_tests": final_selected_tests,
+            "test_provenance": test_provenance,
+            "coverage_gaps": coverage_gaps,
             "current_stage": "impact_analysis",
         }
     finally:
@@ -147,12 +193,33 @@ def impact_analysis_node(state: WorkflowState) -> Dict[str, Any]:
 
 
 def test_planning_node(state: WorkflowState) -> Dict[str, Any]:
-    """Agent 4: Test Planning Agent - Proposes edge-case test cases based on rule context."""
-    rule_name = state.get("domain_context", {}).get("rule_name", "Safe Driver Discount")
+    """Agent 4: Test Planning Agent - Proposes edge-case test cases using actual parsed rule conditions."""
+    domain_ctx = state.get("domain_context", {})
+    rule_name = domain_ctx.get("rule_name", "Safe Driver Discount")
+    parsed_change = state.get("parsed_change", {})
+    
+    # Extract actual rule conditions from domain context or database
+    db = SessionLocal()
+    conditions = []
+    try:
+        proposed_v_id = state.get("proposed_version_id")
+        if proposed_v_id:
+            pv = db.query(RuleVersion).filter_by(id=proposed_v_id).first()
+            if pv and isinstance(pv.rule_definition, dict):
+                conditions = pv.rule_definition.get("conditions", [])
+    finally:
+        db.close()
+
+    # Pass actual rule conditions and parsed fields to test planner
+    affected_field = parsed_change.get("condition_field")
+    existing_tags = ["jurisdiction", "driver_risk_score", "vehicle_category"]
+    if affected_field and affected_field not in existing_tags:
+        existing_tags.append(affected_field)
+
     suggested = ai_provider.suggest_missing_test_cases(
         rule_name=rule_name,
-        conditions=[],
-        existing_test_tags=["jurisdiction", "driver_risk_score", "vehicle_category"]
+        conditions=conditions,
+        existing_test_tags=existing_tags
     )
 
     return {
@@ -220,6 +287,7 @@ def readiness_assessment_node(state: WorkflowState) -> Dict[str, Any]:
     snapshot_id = None
     snapshot_hash = None
     try:
+        test_provenance = state.get("test_provenance", {})
         snapshot = SnapshotService.create_snapshot(
             db=db,
             change_request_id=cr_id,
@@ -231,6 +299,7 @@ def readiness_assessment_node(state: WorkflowState) -> Dict[str, Any]:
             impacted_artifacts=impacted,
             selected_test_ids=selected_tests,
             readiness_result=readiness,
+            test_provenance=test_provenance,
         )
         snapshot_id = snapshot.id
         snapshot_hash = snapshot.snapshot_hash

@@ -14,6 +14,7 @@ class WorkflowState(TypedDict, total=False):
     impacted_artifacts: List[Dict[str, Any]]
     dependency_paths: List[List[str]]
     selected_tests: List[str]
+    test_provenance: Dict[str, Dict[str, Any]]
     suggested_tests: List[Dict[str, Any]]
     test_results: List[Dict[str, Any]]
     coverage_gaps: List[str]

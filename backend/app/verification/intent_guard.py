@@ -122,21 +122,32 @@ class IntentGuardVerifier:
             )
             summary = description
 
-            # Dynamically resolve linked requirement and test
-            linked_req = db.query(Requirement).first()
-            linked_req_id = linked_req.id if linked_req else None
-
-            # Dynamically match the specific regression test whose inputs match this transaction scenario
-            matching_test = None
+            # Dynamically resolve linked requirement from rule's tests, graph, or domain
+            linked_req_id = None
             candidate_tests = db.query(RegressionTest).filter(
                 RegressionTest.linked_rule_id == approved_rv.rule_id
             ).all()
+
+            # First look for test-associated requirement
             for t in candidate_tests:
-                if t.input_data.get("jurisdiction") == input_data.get("jurisdiction"):
+                if t.linked_requirement_id:
+                    linked_req_id = t.linked_requirement_id
+                    break
+
+            # Fallback to requirement matching product scope or rule domain
+            if not linked_req_id:
+                req = db.query(Requirement).filter(
+                    (Requirement.domain.ilike("%Auto%")) |
+                    (Requirement.title.ilike(f"%{approved_rv.rule.name if approved_rv.rule else 'Safe Driver'}%"))
+                ).first()
+                if req:
+                    linked_req_id = req.id
+            for t in candidate_tests:
+                # Require actual scenario alignment: matching jurisdiction or failure category
+                if t.input_data.get("jurisdiction") and t.input_data.get("jurisdiction") == input_data.get("jurisdiction"):
                     matching_test = t
                     break
-            if not matching_test and candidate_tests:
-                matching_test = candidate_tests[0]
+            # Do NOT attach an arbitrary unrelated test if no match exists
             linked_test_id = matching_test.id if matching_test else None
 
             # Create traceable finding

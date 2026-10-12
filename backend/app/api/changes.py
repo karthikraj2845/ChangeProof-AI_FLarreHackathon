@@ -217,19 +217,62 @@ def approve_change(change_id: str, payload: HumanReviewDecisionRequest, db: Sess
         raise HTTPException(status_code=404, detail="Change request not found")
 
     if cr.readiness_status == "BLOCKED":
+        denial_audit = AuditEvent(
+            id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+            event_type="APPROVAL_ATTEMPT_DENIED_REGRESSION_BLOCK",
+            entity_type="CHANGE_REQUEST",
+            entity_id=change_id,
+            actor=payload.reviewer,
+            details={"justification": payload.justification, "reason": "Deterministic policy blocker active"},
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(denial_audit)
+        db.commit()
         raise HTTPException(
             status_code=400,
             detail="GOVERNANCE VIOLATION: Cannot approve change. Release is strictly BLOCKED by deterministic policy due to critical regressions."
         )
 
-    # Verify Snapshot Integrity if present in readiness details
-    if cr.readiness_details and cr.readiness_details.get("snapshot_id"):
-        validity = SnapshotService.verify_snapshot_validity(db, cr.readiness_details["snapshot_id"])
-        if not validity["valid"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"STALE EVIDENCE: {validity.get('reason')}"
-            )
+    # Verify Snapshot Integrity, Freshness, and Change Isolation
+    snap_id = payload.snapshot_id or (cr.readiness_details.get("snapshot_id") if cr.readiness_details else None)
+    if not snap_id:
+        denial_audit = AuditEvent(
+            id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+            event_type="APPROVAL_ATTEMPT_DENIED_NO_SNAPSHOT",
+            entity_type="CHANGE_REQUEST",
+            entity_id=change_id,
+            actor=payload.reviewer,
+            details={"justification": payload.justification, "reason": "No evidence snapshot bound"},
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(denial_audit)
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail="GOVERNANCE VIOLATION: Cannot approve change without a valid, persisted Evidence Snapshot."
+        )
+
+    validity = SnapshotService.verify_snapshot_validity(
+        db=db,
+        snapshot_id=snap_id,
+        expected_change_request_id=change_id,
+    )
+    if not validity["valid"]:
+        denial_audit = AuditEvent(
+            id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+            event_type="APPROVAL_ATTEMPT_DENIED_INVALID_EVIDENCE",
+            entity_type="CHANGE_REQUEST",
+            entity_id=change_id,
+            actor=payload.reviewer,
+            details={"justification": payload.justification, "reason": validity.get("reason"), "snapshot_id": snap_id},
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(denial_audit)
+        db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"STALE EVIDENCE: {validity.get('reason')}"
+        )
 
     cr.status = "APPROVED"
     now = datetime.now(timezone.utc)

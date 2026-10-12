@@ -111,14 +111,19 @@ The change assurance workflow uses a typed LangGraph `WorkflowState` persisted w
 - `human_review_decision`: Reviewer identity, action, and justification
 - `current_stage` / `status`: Lifecycle indicators
 
-### Graph Nodes
-1. `change_understanding`: Parses change request.
-2. `insurance_context`: Retrieves rule, requirement, and version records.
-3. `impact_analysis`: Traverses NetworkX graph for reachability and explainable scoring.
-4. `test_planning`: Discovers existing tests and synthesizes candidate test cases.
-5. `test_execution`: Executes regression runner deterministically.
-6. `readiness_assessment`: Evaluates hard regression blockers and human review triggers.
-7. `human_review_gate`: Workflow pauses here, awaiting formal governance action.
+### Graph Nodes & Durable Checkpointing
+1. `change_understanding`: Parses change request via strictly validated Pydantic schema (`ParsedChangeSchema`).
+2. `insurance_context`: Retrieves rule, requirement, and version records from database.
+3. `impact_analysis`: Traverses NetworkX graph for reachability, cycle protection, and multi-factor explainable scoring.
+4. `test_planning`: Dynamically discovers existing tests (via graph topology, direct rule association, and requirement traceability) with per-test provenance, and synthesizes candidate test cases.
+5. `test_execution`: Executes regression runner deterministically side-by-side.
+6. `readiness_assessment`: Evaluates hard regression blockers, generates a cryptographic `EvidenceSnapshot` (SHA-256 fingerprint of rule definitions, graph topology, test results, blockers, and test provenance), and pauses at human review.
+7. `human_review_gate`: Workflow halts via LangGraph `interrupt_before=["human_review_gate"]` backed by a persistent `SqliteSaver` checkpointer. Formal review resumes state safely via `update_state(config, {"human_review_decision": ...})` followed by `invoke(None)`.
+
+### Cryptographic Evidence Snapshot & Governance Gate
+- An approval cannot proceed if the evidence snapshot is missing, stale, or tampered.
+- Detects mutated rule versions and rejects cross-run or cross-change resume attempts.
+- Rejection or revision requests immediately halt promotion and emit immutable audit events (`APPROVAL_ATTEMPT_DENIED_*`).
 
 ---
 

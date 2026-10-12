@@ -4,8 +4,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com/)
 [![React 18](https://img.shields.io/badge/React-18.3-61dafb.svg)](https://reactjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-orange.svg)](https://github.com/langchain-ai/langgraph)
-[![Tests Passing](https://img.shields.io/badge/tests-16%20passed-brightgreen.svg)]()
+[![Tests Passing](https://img.shields.io/badge/tests-29%20passed-brightgreen.svg)]()
 
 > **Every Insurance Change. Traced, Tested, Verified.**  
 > *A Production-Inspired, Insurance-Native Agentic AI Platform for Flarre.AI Innovation Challenge 2026*
@@ -132,24 +131,37 @@ configfile: pytest.ini
 testpaths: tests
 plugins: anyio-4.15.1, langsmith-0.14.7, asyncio-1.4.0
 
-tests/test_api_endpoints.py::test_health_check_endpoint PASSED           [  6%]
-tests/test_api_endpoints.py::test_dashboard_summary_endpoint PASSED      [ 12%]
-tests/test_api_endpoints.py::test_rules_and_versions_endpoints PASSED    [ 18%]
-tests/test_api_endpoints.py::test_dependency_graph_endpoint PASSED       [ 25%]
-tests/test_api_endpoints.py::test_intentguard_simulation_endpoint PASSED [ 31%]
-tests/test_e2e_acceptance.py::test_mandatory_end_to_end_acceptance PASSED [ 37%]
-tests/test_graph_service.py::test_graph_loading_and_traversal PASSED     [ 43%]
-tests/test_graph_service.py::test_impact_score_calculation PASSED        [ 50%]
-tests/test_intent_guard.py::test_intent_guard_detects_deviation_and_creates_finding PASSED [ 56%]
-tests/test_langgraph_workflow.py::test_langgraph_workflow_execution_and_resumption PASSED [ 62%]
-tests/test_readiness_policy.py::test_readiness_policy_blocks_on_regression PASSED [ 68%]
-tests/test_readiness_policy.py::test_readiness_policy_passes_clean_release PASSED [ 75%]
-tests/test_regression_runner.py::test_regression_test_runner_detects_seeded_defect PASSED [ 81%]
-tests/test_rule_engine.py::test_rule_condition_operators PASSED          [ 87%]
-tests/test_rule_engine.py::test_rule_evaluation_baseline_success PASSED  [ 93%]
+tests/test_api_endpoints.py::test_health_check_endpoint PASSED           [  3%]
+tests/test_api_endpoints.py::test_dashboard_summary_endpoint PASSED      [  6%]
+tests/test_api_endpoints.py::test_rules_and_versions_endpoints PASSED    [ 10%]
+tests/test_api_endpoints.py::test_dependency_graph_endpoint PASSED       [ 13%]
+tests/test_api_endpoints.py::test_intentguard_simulation_endpoint PASSED [ 17%]
+tests/test_change_parser.py::test_valid_safe_driver_discount_change PASSED [ 20%]
+tests/test_change_parser.py::test_modify_driver_risk_score_threshold PASSED [ 24%]
+tests/test_change_parser.py::test_empty_request_handling PASSED          [ 27%]
+tests/test_change_parser.py::test_vague_request_handling PASSED          [ 31%]
+tests/test_change_parser.py::test_unsupported_operation_handling PASSED  [ 34%]
+tests/test_change_parser.py::test_contradictory_request_handling PASSED  [ 37%]
+tests/test_change_parser.py::test_pydantic_schema_validation_untrusted_input PASSED [ 41%]
+tests/test_e2e_acceptance.py::test_mandatory_end_to_end_acceptance PASSED [ 44%]
+tests/test_governance_snapshots.py::test_immutable_snapshot_creation_and_integrity PASSED [ 48%]
+tests/test_governance_snapshots.py::test_stale_evidence_detection_on_mutated_version PASSED [ 51%]
+tests/test_governance_snapshots.py::test_tampered_snapshot_payload_detection PASSED [ 55%]
+tests/test_graph_dynamic_expansion.py::test_dynamic_graph_expansion_discovers_new_tests PASSED [ 58%]
+tests/test_graph_dynamic_expansion.py::test_dependency_graph_cycle_handling PASSED [ 62%]
+tests/test_graph_service.py::test_graph_loading_and_traversal PASSED     [ 65%]
+tests/test_graph_service.py::test_impact_score_calculation PASSED        [ 68%]
+tests/test_intent_guard.py::test_intent_guard_detects_deviation_and_creates_finding PASSED [ 72%]
+tests/test_langgraph_workflow.py::test_langgraph_workflow_execution_and_resumption PASSED [ 75%]
+tests/test_langgraph_workflow.py::test_langgraph_revision_request_routing PASSED [ 79%]
+tests/test_readiness_policy.py::test_readiness_policy_blocks_on_regression PASSED [ 82%]
+tests/test_readiness_policy.py::test_readiness_policy_passes_clean_release PASSED [ 86%]
+tests/test_regression_runner.py::test_regression_test_runner_detects_seeded_defect PASSED [ 89%]
+tests/test_rule_engine.py::test_rule_condition_operators PASSED          [ 93%]
+tests/test_rule_engine.py::test_rule_evaluation_baseline_success PASSED  [ 96%]
 tests/test_rule_engine.py::test_rule_evaluation_baseline_rejection_unsupported_state PASSED [100%]
 
-============================= 16 passed in 3.05s ==============================
+============================= 29 passed in 3.27s ==============================
 ```
 
 ---
