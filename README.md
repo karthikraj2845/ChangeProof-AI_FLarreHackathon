@@ -4,7 +4,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com/)
 [![React 18](https://img.shields.io/badge/React-18.3-61dafb.svg)](https://reactjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![Tests Passing](https://img.shields.io/badge/tests-29%20passed-brightgreen.svg)]()
+[![Tests Passing](https://img.shields.io/badge/tests-45%20passed-brightgreen.svg)]()
 
 > **Every Insurance Change. Traced, Tested, Verified.**  
 > *A Production-Inspired, Insurance-Native Agentic AI Platform for Flarre.AI Innovation Challenge 2026*

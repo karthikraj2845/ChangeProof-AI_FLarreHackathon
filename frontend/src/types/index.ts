@@ -110,6 +110,8 @@ export interface ReadinessResult {
   recommendation: string;
   requires_human_approval: boolean;
   governance_note: string;
+  snapshot_id?: string;
+  snapshot_hash?: string;
 }
 
 export interface WorkflowState {

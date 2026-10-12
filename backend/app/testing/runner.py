@@ -141,8 +141,9 @@ class RegressionTestRunner:
 
             # Persist test result if verification run ID is provided
             if verification_run_id:
+                # Use unique prefix + test_id to prevent truncation collisions
                 tr = TestResult(
-                    id=f"TR-{verification_run_id[:8]}-{test.id}",
+                    id=f"TR-{verification_run_id}-{test.id}",
                     verification_run_id=verification_run_id,
                     test_id=test.id,
                     rule_version_id=proposed_version_id,

@@ -159,26 +159,13 @@ def impact_analysis_node(state: WorkflowState) -> Dict[str, Any]:
                         "reason": f"Traceable to impacted requirement {t.linked_requirement_id}",
                     }
 
-        # 4. Mandatory safety/invariant baseline tests for target rule (if present in DB)
-        candidate_mandatory = ["TEST-SD-001", "TEST-SD-002", "TEST-SD-007"]
-        mandatory_in_db = db.query(RegressionTest).filter(
-            RegressionTest.id.in_(candidate_mandatory),
-            RegressionTest.linked_rule_id == target_rule_id
-        ).all()
-        for m in mandatory_in_db:
-            if m.id not in test_provenance:
-                test_provenance[m.id] = {
-                    "source": "MANDATORY_INVARIANT_SAFETY",
-                    "target_rule_id": target_rule_id,
-                    "reason": "Mandatory safety baseline/boundary invariant for rule",
-                }
-
         final_selected_tests = sorted(list(test_provenance.keys()))
 
-        # If no tests discovered at all, report coverage gap
+        # If no tests discovered dynamically from graph, rule association, or requirements, report an explicit coverage gap
         coverage_gaps = list(state.get("coverage_gaps", []))
         if not final_selected_tests:
-            coverage_gaps.append(f"No regression tests mapped to rule '{target_rule_id}' or its impacted dependencies.")
+            gap_msg = f"MISSING_TEST_COVERAGE: No regression tests mapped via dependency graph, direct rule association, or requirement traceability for rule '{target_rule_id}'."
+            coverage_gaps.append(gap_msg)
 
         return {
             "impacted_artifacts": impacted,

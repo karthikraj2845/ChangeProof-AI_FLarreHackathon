@@ -158,13 +158,30 @@ class AIProvider:
         ambiguity = False
         target_value = None
 
-        # Check for explicit target rule mention if present
-        if any(w in text_lower for w in ["safe-driver", "safe driver", "rule-safe-driver", "telematics discount"]):
-            target_rule = "RULE-SAFE-DRIVER"
-        elif "commercial" in text_lower:
-            target_rule = "RULE-COMMERCIAL-FLEET"
-        elif "homeowners" in text_lower:
-            target_rule = "RULE-HOMEOWNERS-WIND"
+        # Resolve known rules from database if accessible
+        try:
+            from app.db.session import SessionLocal
+            from app.models.rule import Rule
+            db = SessionLocal()
+            try:
+                db_rules = db.query(Rule).all()
+                for r in db_rules:
+                    if r.id.lower() in text_lower or r.name.lower() in text_lower:
+                        target_rule = r.id
+                        break
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+        # Fallback keyword checks if DB lookup did not match
+        if not target_rule:
+            if any(w in text_lower for w in ["safe-driver", "safe driver", "rule-safe-driver", "telematics discount"]):
+                target_rule = "RULE-SAFE-DRIVER"
+            elif "commercial" in text_lower:
+                target_rule = "RULE-COMMERCIAL-FLEET"
+            elif "homeowners" in text_lower:
+                target_rule = "RULE-HOMEOWNERS-WIND"
 
         # Check for condition fields and operations
         if "jurisdiction" in text_lower or "state" in text_lower:
@@ -189,12 +206,12 @@ class AIProvider:
             operation = "UNSUPPORTED_OPERATION"
             condition_field = "unknown"
 
-        # Check for unknown rule names
+        # Check for explicit unknown rule tokens like "rule-xyz"
         if "rule-" in text_lower and not target_rule:
             words = text_lower.split()
             for w in words:
                 if w.startswith("rule-"):
-                    target_rule = w.upper()
+                    target_rule = w.upper().rstrip(".,;:!?")
                     break
 
         # Check if contradictory or unsupported
@@ -213,12 +230,27 @@ class AIProvider:
 
         confidence = 0.98 if (condition_field != "unknown" and not ambiguity and target_rule) else (0.20 if ambiguity else 0.40)
 
+        # Build explicit clarification description
+        if ambiguity:
+            if operation == "AMBIGUOUS_REQUEST":
+                clarification_desc = (
+                    f"CLARIFICATION REQUIRED: Request contains conflicting or contradictory directives "
+                    f"('{raw_text}'). Please specify whether the intent is to increase or decrease, or approve or deny."
+                )
+            else:
+                clarification_desc = (
+                    f"UNSUPPORTED OR AMBIGUOUS REQUEST: Could not resolve a supported rule or condition field "
+                    f"from '{raw_text}'. Supported fields: jurisdiction, driver_risk_score, vehicle_category, policy_active."
+                )
+        else:
+            clarification_desc = f"Parsed intent: {operation} on field '{condition_field}' for rule {target_rule}."
+
         result = ParsedChangeSchema(
             target_rule=target_rule,
             operation=operation,
             condition_field=condition_field,
             target_value=target_value,
-            description=f"Parsed intent: {operation} on field '{condition_field}' for rule {target_rule}." if not ambiguity else "Ambiguous, contradictory, or unsupported change request.",
+            description=clarification_desc,
             ambiguity_flag=ambiguity,
             confidence=confidence,
             provider_mode="LLM" if (self.has_llm and self.client) else "HEURISTIC_OFFLINE_CAPABLE",

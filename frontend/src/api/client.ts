@@ -62,7 +62,7 @@ export const apiClient = {
     return res.data;
   },
 
-  resumeWorkflow: async (workflowId: string, payload: { reviewer: string; action: string; justification: string }): Promise<any> => {
+  resumeWorkflow: async (workflowId: string, payload: { reviewer: string; action: string; justification: string; snapshot_id?: string; snapshot_hash?: string }): Promise<any> => {
     const res = await api.post(`/workflows/${workflowId}/resume`, payload);
     return res.data;
   },
@@ -83,13 +83,13 @@ export const apiClient = {
     return res.data;
   },
 
-  approveChange: async (changeId: string, reviewer: string, justification: string): Promise<any> => {
-    const res = await api.post(`/changes/${changeId}/approve`, { reviewer, justification });
+  approveChange: async (changeId: string, reviewer: string, justification: string, snapshot_id?: string, snapshot_hash?: string): Promise<any> => {
+    const res = await api.post(`/changes/${changeId}/approve`, { reviewer, justification, snapshot_id, snapshot_hash });
     return res.data;
   },
 
-  rejectChange: async (changeId: string, reviewer: string, justification: string): Promise<any> => {
-    const res = await api.post(`/changes/${changeId}/reject`, { reviewer, justification });
+  rejectChange: async (changeId: string, reviewer: string, justification: string, snapshot_id?: string, snapshot_hash?: string): Promise<any> => {
+    const res = await api.post(`/changes/${changeId}/reject`, { reviewer, justification, snapshot_id, snapshot_hash });
     return res.data;
   },
 

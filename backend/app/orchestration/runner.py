@@ -119,6 +119,7 @@ class WorkflowRunner:
         action: str,  # APPROVE, REJECT, REQUEST_MORE_TESTS, REVISION_REQUIRED
         justification: str,
         snapshot_id: Optional[str] = None,
+        snapshot_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Resumes the paused LangGraph workflow from its checkpoint after validating
@@ -132,13 +133,17 @@ class WorkflowRunner:
         if wf_record.status in ["APPROVED", "REJECTED", "REVISION_REQUIRED"] and wf_record.completion_time is not None:
             raise ValueError(f"Workflow {workflow_id} has already concluded with status '{wf_record.status}'. Cannot submit duplicate review.")
 
-        state = dict(wf_record.state_json or {})
-        readiness = state.get("readiness_result", {})
-        is_blocked = readiness.get("is_blocked", False) or readiness.get("status") == "BLOCKED"
-
         normalized_action = action.upper()
         if normalized_action == "REQUEST_MORE_TESTS":
             normalized_action = "REVISION_REQUIRED"
+
+        valid_actions = {"APPROVE", "REJECT", "REVISION_REQUIRED"}
+        if normalized_action not in valid_actions:
+            raise ValueError(f"Invalid review action '{action}'. Permitted actions: {sorted(list(valid_actions))}")
+
+        state = dict(wf_record.state_json or {})
+        readiness = state.get("readiness_result", {})
+        is_blocked = readiness.get("is_blocked", False) or readiness.get("status") == "BLOCKED"
 
         # Governance Rule 1: Ordinary human approval CANNOT override a failed regression suite
         if normalized_action == "APPROVE" and is_blocked:
@@ -160,25 +165,45 @@ class WorkflowRunner:
 
         # Governance Rule 2: Verify Evidence Snapshot Integrity, Freshness, and Run Isolation
         effective_snapshot_id = snapshot_id or state.get("snapshot_id")
-        if not effective_snapshot_id and normalized_action == "APPROVE":
-            denial_audit = AuditEvent(
-                id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
-                event_type="APPROVAL_ATTEMPT_DENIED_NO_SNAPSHOT",
-                entity_type="WORKFLOW_RUN",
-                entity_id=workflow_id,
-                actor=reviewer,
-                details={"action": normalized_action, "justification": justification, "reason": "No evidence snapshot bound"},
-                timestamp=datetime.now(timezone.utc),
-            )
-            db.add(denial_audit)
-            db.commit()
-            raise ValueError("GOVERNANCE VIOLATION: Cannot approve change without a valid, persisted Evidence Snapshot.")
+        effective_snapshot_hash = snapshot_hash or state.get("snapshot_hash")
+
+        if normalized_action == "APPROVE":
+            if not effective_snapshot_id:
+                denial_audit = AuditEvent(
+                    id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+                    event_type="APPROVAL_ATTEMPT_DENIED_NO_SNAPSHOT",
+                    entity_type="WORKFLOW_RUN",
+                    entity_id=workflow_id,
+                    actor=reviewer,
+                    details={"action": normalized_action, "justification": justification, "reason": "No evidence snapshot bound"},
+                    timestamp=datetime.now(timezone.utc),
+                )
+                db.add(denial_audit)
+                db.commit()
+                raise ValueError("GOVERNANCE VIOLATION: Cannot approve change without a valid, persisted Evidence Snapshot.")
+
+            # Validate reviewed hash if provided explicitly
+            if snapshot_hash and state.get("snapshot_hash") and snapshot_hash != state.get("snapshot_hash"):
+                denial_audit = AuditEvent(
+                    id=f"AUDIT-DENIED-{uuid.uuid4().hex[:6]}-{uuid.uuid4().hex[:4].upper()}",
+                    event_type="APPROVAL_ATTEMPT_DENIED_HASH_MISMATCH",
+                    entity_type="WORKFLOW_RUN",
+                    entity_id=workflow_id,
+                    actor=reviewer,
+                    details={"action": normalized_action, "justification": justification, "reason": "Reviewed snapshot hash does not match run checkpoint snapshot hash"},
+                    timestamp=datetime.now(timezone.utc),
+                )
+                db.add(denial_audit)
+                db.commit()
+                raise ValueError(f"EVIDENCE HASH MISMATCH: Human reviewed hash '{snapshot_hash}' does not match workflow run hash '{state.get('snapshot_hash')}'.")
+
         if effective_snapshot_id:
             validity = SnapshotService.verify_snapshot_validity(
                 db=db,
                 snapshot_id=effective_snapshot_id,
                 expected_workflow_run_id=workflow_id,
                 expected_change_request_id=wf_record.change_request_id,
+                expected_snapshot_hash=effective_snapshot_hash,
             )
             if not validity["valid"]:
                 denial_audit = AuditEvent(
@@ -200,6 +225,7 @@ class WorkflowRunner:
             "action": normalized_action,
             "justification": justification,
             "snapshot_id": effective_snapshot_id,
+            "snapshot_hash": effective_snapshot_hash,
             "timestamp": now.isoformat(),
         }
 

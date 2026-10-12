@@ -125,15 +125,17 @@ class SnapshotService:
         snapshot_id: str,
         expected_workflow_run_id: Optional[str] = None,
         expected_change_request_id: Optional[str] = None,
+        expected_snapshot_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Validates that an existing snapshot is cryptographically intact and has not become stale.
         Checks:
           1. Snapshot exists and its data reproduces the snapshot_hash.
           2. Snapshot belongs to the expected workflow run / change request.
-          3. Baseline rule version has not changed.
-          4. Proposed rule version has not changed.
-          5. Graph dependencies have not changed (graph_fingerprint matches).
+          3. Exact reviewed snapshot_hash matches stored snapshot_hash.
+          4. Baseline rule version has not changed.
+          5. Proposed rule version has not changed.
+          6. Graph dependencies have not changed (graph_fingerprint matches).
         """
         snapshot = db.query(EvidenceSnapshot).filter_by(id=snapshot_id).first()
         if not snapshot:
@@ -151,6 +153,14 @@ class SnapshotService:
                 "valid": False,
                 "stale": False,
                 "reason": f"Cross-change collision: Snapshot '{snapshot_id}' belongs to change '{snapshot.change_request_id}', not '{expected_change_request_id}'.",
+            }
+
+        # Validate exact reviewed snapshot hash if supplied
+        if expected_snapshot_hash and snapshot.snapshot_hash != expected_snapshot_hash:
+            return {
+                "valid": False,
+                "stale": False,
+                "reason": f"Hash mismatch: Provided review snapshot hash '{expected_snapshot_hash}' does not match stored snapshot hash '{snapshot.snapshot_hash}'.",
             }
 
         # 1. Verify snapshot hash integrity

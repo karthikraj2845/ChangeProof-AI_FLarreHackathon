@@ -84,6 +84,7 @@ def resume_workflow(workflow_id: str, payload: ResumeWorkflowRequest, db: Sessio
             action=payload.action,
             justification=payload.justification,
             snapshot_id=payload.snapshot_id,
+            snapshot_hash=payload.snapshot_hash,
         )
         return {
             "message": f"Workflow resumed with review decision: {payload.action}",

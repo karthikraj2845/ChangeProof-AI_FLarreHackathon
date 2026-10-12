@@ -122,33 +122,34 @@ class IntentGuardVerifier:
             )
             summary = description
 
-            # Dynamically resolve linked requirement from rule's tests, graph, or domain
+            # Dynamically resolve linked requirement and test using ONLY explicit verified relationships.
+            # No fuzzy domain/title matching — return UNVERIFIABLE provenance when no explicit link exists.
             linked_req_id = None
+            req_provenance = "UNVERIFIABLE"
             candidate_tests = db.query(RegressionTest).filter(
                 RegressionTest.linked_rule_id == approved_rv.rule_id
             ).all()
 
-            # First look for test-associated requirement
+            # Requirement: only via explicit linked_requirement_id on tests that reference this rule
             for t in candidate_tests:
                 if t.linked_requirement_id:
-                    linked_req_id = t.linked_requirement_id
-                    break
+                    # Verify the requirement actually exists in the database
+                    req = db.query(Requirement).filter_by(id=t.linked_requirement_id).first()
+                    if req:
+                        linked_req_id = t.linked_requirement_id
+                        req_provenance = "VERIFIED_VIA_TEST_LINK"
+                        break
 
-            # Fallback to requirement matching product scope or rule domain
-            if not linked_req_id:
-                req = db.query(Requirement).filter(
-                    (Requirement.domain.ilike("%Auto%")) |
-                    (Requirement.title.ilike(f"%{approved_rv.rule.name if approved_rv.rule else 'Safe Driver'}%"))
-                ).first()
-                if req:
-                    linked_req_id = req.id
+            # Test: require explicit scenario alignment — matching jurisdiction in input_data
+            matching_test = None
             for t in candidate_tests:
-                # Require actual scenario alignment: matching jurisdiction or failure category
-                if t.input_data.get("jurisdiction") and t.input_data.get("jurisdiction") == input_data.get("jurisdiction"):
+                test_input = t.input_data if isinstance(t.input_data, dict) else {}
+                if test_input.get("jurisdiction") and test_input.get("jurisdiction") == input_data.get("jurisdiction"):
                     matching_test = t
                     break
             # Do NOT attach an arbitrary unrelated test if no match exists
             linked_test_id = matching_test.id if matching_test else None
+            test_provenance = "VERIFIED_SCENARIO_MATCH" if matching_test else "UNVERIFIABLE"
 
             # Create traceable finding
             finding_record = Finding(
@@ -179,7 +180,13 @@ class IntentGuardVerifier:
                         "expected_discount": expected_discount,
                         "observed_discount": observed_discount,
                         "variance": round(observed_discount - expected_discount, 2),
-                    }
+                    },
+                    "traceability": {
+                        "requirement_provenance": req_provenance,
+                        "test_provenance": test_provenance,
+                        "linked_requirement_id": linked_req_id,
+                        "linked_test_id": linked_test_id,
+                    },
                 },
                 status="OPEN",
                 created_at=now,

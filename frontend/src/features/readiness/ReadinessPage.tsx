@@ -40,7 +40,9 @@ export const ReadinessPage: React.FC = () => {
   const handleApprove = async () => {
     try {
       setIsSubmitting(true);
-      const res = await apiClient.approveChange('CR-2026-001', reviewer, justification);
+      const snapId = readiness?.snapshot_id;
+      const snapHash = readiness?.snapshot_hash;
+      const res = await apiClient.approveChange('CR-2026-001', reviewer, justification, snapId, snapHash);
       setActionMessage(`Approved: ${res.message}`);
       loadReadiness();
     } catch (err: any) {

@@ -55,6 +55,7 @@ class ResumeWorkflowRequest(BaseModel):
     action: str = "APPROVE"  # APPROVE, REJECT, REQUEST_MORE_TESTS, REVISION_REQUIRED
     justification: str
     snapshot_id: Optional[str] = None
+    snapshot_hash: Optional[str] = None
 
 
 # Human Review
@@ -62,6 +63,7 @@ class HumanReviewDecisionRequest(BaseModel):
     reviewer: str
     justification: str
     snapshot_id: Optional[str] = None
+    snapshot_hash: Optional[str] = None
 
 
 # Verification & Simulation
